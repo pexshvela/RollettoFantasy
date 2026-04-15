@@ -156,6 +156,16 @@ def player_list_keyboard(lang: str, position: str, slot: str,
     return kb.as_markup()
 
 
+def slot_action_keyboard(lang: str, position: str, slot: str, player_id: str) -> InlineKeyboardMarkup:
+    """Shown when user taps a slot that already has a player — Replace or Remove."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔄 Replace player",    callback_data=f"slot_replace:{position}:{slot}")
+    kb.button(text="❌ Remove player",     callback_data=f"slot_remove:{slot}")
+    kb.button(text="◀️ Back to squad",    callback_data="squad:view")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def confirm_player_keyboard(lang: str, player_id: str, slot: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "yes_btn"), callback_data=f"confirm_player:{player_id}:{slot}")
@@ -240,7 +250,25 @@ def admin_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb.button(text=t(lang, "admin_send_msg"),  callback_data="admin:send_msg")
     kb.button(text=t(lang, "admin_broadcast"), callback_data="admin:broadcast")
     kb.button(text=t(lang, "admin_pending"),   callback_data="admin:pending")
+    kb.button(text="🔄 Reset",                 callback_data="admin:reset")
     kb.button(text=t(lang, "back_home"),       callback_data="home:back")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def reset_type_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👤 Reset user(s) by ID",    callback_data="reset:by_id")
+    kb.button(text="🔴 Full campaign reset",     callback_data="reset:campaign")
+    kb.button(text="◀️ Back",                   callback_data="admin:back_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def reset_campaign_confirm_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔴 YES, RESET EVERYTHING",  callback_data="reset:campaign_confirm")
+    kb.button(text="❌ Cancel",                  callback_data="admin:back_menu")
     kb.adjust(1)
     return kb.as_markup()
 
