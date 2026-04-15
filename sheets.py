@@ -46,9 +46,14 @@ PENDING_HEADERS = [
 ]
 
 
+_client_cache: gspread.Client | None = None
+
 def _get_client() -> gspread.Client:
-    creds = Credentials.from_service_account_info(config.GOOGLE_CREDENTIALS, scopes=SCOPES)
-    return gspread.authorize(creds)
+    global _client_cache
+    if _client_cache is None:
+        creds = Credentials.from_service_account_info(config.GOOGLE_CREDENTIALS, scopes=SCOPES)
+        _client_cache = gspread.authorize(creds)
+    return _client_cache
 
 
 def _ensure_worksheet(sh, name: str, headers: list) -> gspread.Worksheet:
