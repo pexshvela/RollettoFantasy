@@ -137,7 +137,7 @@ async def admin_confirm_yes(callback: CallbackQuery, state: FSMContext):
     sent = 0
     for uid in target_ids:
         try:
-            await callback.bot.forward_message(chat_id=uid, from_chat_id=msg_chat_id, message_id=msg_id)
+            await callback.bot.copy_message(chat_id=uid, from_chat_id=msg_chat_id, message_id=msg_id)
             sent += 1
         except Exception as e:
             logger.warning("Could not send to %s: %s", uid, e)
