@@ -1,0 +1,238 @@
+import logging
+from aiogram import Router, F
+from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
+
+import config
+import sheets
+from states import Admin
+from translations import t
+from inline import admin_menu_keyboard, admin_confirm_send_keyboard, admin_broadcast_type_keyboard, home_keyboard
+from helpers import get_lang
+
+logger = logging.getLogger(__name__)
+router = Router()
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id == config.ADMIN_ID
+
+
+@router.callback_query(F.data == "home:admin")
+async def admin_panel(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(t(lang, "admin_menu"), parse_mode="HTML", reply_markup=admin_menu_keyboard(lang))
+    await state.set_state(Admin.menu)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:send_msg", Admin.menu)
+async def admin_send_msg(callback: CallbackQuery, state: FSMContext):
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(t(lang, "admin_get_id"), parse_mode="HTML")
+    await state.set_state(Admin.get_target_id)
+    await callback.answer()
+
+
+@router.message(Admin.get_target_id)
+async def admin_get_target(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("Please send a valid numeric Telegram ID.")
+        return
+    target = await sheets.get_user(target_id)
+    if not target:
+        user = await sheets.get_user(message.from_user.id)
+        lang = await get_lang(message.from_user.id, user)
+        await message.answer(t(lang, "admin_user_not_found"), parse_mode="HTML")
+        return
+    await state.update_data(target_ids=[target_id])
+    user = await sheets.get_user(message.from_user.id)
+    lang = await get_lang(message.from_user.id, user)
+    await message.answer(t(lang, "admin_get_msg"), parse_mode="HTML")
+    await state.set_state(Admin.get_message)
+
+
+@router.callback_query(F.data == "admin:broadcast", Admin.menu)
+async def admin_broadcast(callback: CallbackQuery, state: FSMContext):
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text("Choose broadcast target:", parse_mode="HTML", reply_markup=admin_broadcast_type_keyboard(lang))
+    await state.set_state(Admin.get_broadcast_ids)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "broadcast:all", Admin.get_broadcast_ids)
+async def broadcast_all(callback: CallbackQuery, state: FSMContext):
+    all_users = await sheets.get_all_users()
+    ids = [int(u["telegram_id"]) for u in all_users if u.get("telegram_id")]
+    await state.update_data(target_ids=ids)
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(t(lang, "admin_get_msg"), parse_mode="HTML")
+    await state.set_state(Admin.get_broadcast_msg)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "broadcast:ids", Admin.get_broadcast_ids)
+async def broadcast_ids(callback: CallbackQuery, state: FSMContext):
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(t(lang, "admin_get_bc_ids"), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(Admin.get_broadcast_ids)
+async def receive_id_list(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    raw = message.text.strip()
+    if raw.upper() == "ALL":
+        all_users = await sheets.get_all_users()
+        ids = [int(u["telegram_id"]) for u in all_users if u.get("telegram_id")]
+    else:
+        try:
+            ids = [int(x.strip()) for x in raw.split(",") if x.strip()]
+        except ValueError:
+            await message.answer("Invalid IDs.")
+            return
+    await state.update_data(target_ids=ids)
+    user = await sheets.get_user(message.from_user.id)
+    lang = await get_lang(message.from_user.id, user)
+    await message.answer(t(lang, "admin_get_msg"), parse_mode="HTML")
+    await state.set_state(Admin.get_broadcast_msg)
+
+
+@router.message(Admin.get_message)
+@router.message(Admin.get_broadcast_msg)
+async def receive_message_content(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.update_data(msg_id=message.message_id, msg_chat_id=message.chat.id)
+    data = await state.get_data()
+    target_ids = data.get("target_ids", [])
+    user = await sheets.get_user(message.from_user.id)
+    lang = await get_lang(message.from_user.id, user)
+    await message.answer(t(lang, "admin_confirm_send", n=len(target_ids)), parse_mode="HTML", reply_markup=admin_confirm_send_keyboard(lang))
+    await state.set_state(Admin.confirming_send)
+
+
+@router.callback_query(F.data == "admin:confirm_yes", Admin.confirming_send)
+async def admin_confirm_yes(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    target_ids = data.get("target_ids", [])
+    msg_id = data.get("msg_id")
+    msg_chat_id = data.get("msg_chat_id")
+    sent = 0
+    for uid in target_ids:
+        try:
+            await callback.bot.forward_message(chat_id=uid, from_chat_id=msg_chat_id, message_id=msg_id)
+            sent += 1
+        except Exception as e:
+            logger.warning("Could not send to %s: %s", uid, e)
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(t(lang, "admin_send_done", n=sent), parse_mode="HTML", reply_markup=home_keyboard(lang, callback.from_user.id, False, False))
+    await state.clear()
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:cancel")
+async def admin_cancel(callback: CallbackQuery, state: FSMContext):
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(t(lang, "admin_menu"), parse_mode="HTML", reply_markup=admin_menu_keyboard(lang))
+    await state.set_state(Admin.menu)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:pending", Admin.menu)
+async def show_pending(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    pending = await sheets.get_pending()
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    if not pending:
+        text = t(lang, "pending_empty")
+    else:
+        lines = [f"🆔 <code>{p.get('telegram_id')}</code> @{p.get('tg_username','N/A')} — <b>{p.get('rolletto_username','N/A')}</b>" for p in pending]
+        text = t(lang, "pending_list", list="\n".join(lines))
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await callback.answer()
+
+
+@router.message(Command("promo"))
+async def cmd_promo(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await message.answer("Enter the Telegram ID of the user to receive the promo:")
+    await state.set_state(Admin.get_promo_id)
+
+
+@router.message(Admin.get_promo_id)
+async def promo_get_id(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        uid = int(message.text.strip())
+    except ValueError:
+        await message.answer("Invalid ID.")
+        return
+    target = await sheets.get_user(uid)
+    if not target:
+        await message.answer("User not found.")
+        return
+    await state.update_data(promo_target_id=uid)
+    await message.answer("Enter the promo code to send:")
+    await state.set_state(Admin.get_promo_code)
+
+
+@router.message(Admin.get_promo_code)
+async def promo_get_code(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    code = message.text.strip()
+    data = await state.get_data()
+    uid = data.get("promo_target_id")
+    user = await sheets.get_user(message.from_user.id)
+    lang = await get_lang(message.from_user.id, user)
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Yes, send", callback_data=f"promo_send:{uid}:{code}")
+    kb.button(text="❌ Cancel", callback_data="admin:cancel")
+    kb.adjust(2)
+    await message.answer(t(lang, "promo_confirm", code=code, uid=uid), parse_mode="HTML", reply_markup=kb.as_markup())
+    await state.set_state(Admin.confirming_send)
+
+
+@router.callback_query(F.data.startswith("promo_send:"))
+async def send_promo(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    parts = callback.data.split(":", 2)
+    uid, code = int(parts[1]), parts[2]
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    try:
+        await callback.bot.send_message(uid, t("en", "promo_sent", code=code), parse_mode="HTML")
+        await callback.message.edit_text(t(lang, "promo_done"), parse_mode="HTML")
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Failed to send: {e}")
+    await state.clear()
+    await callback.answer()
