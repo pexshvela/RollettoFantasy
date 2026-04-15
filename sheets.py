@@ -255,3 +255,48 @@ async def get_all_users() -> list:
     except Exception as e:
         logger.error("get_all_users error: %s", e)
         return []
+
+
+# ── Reset helpers ─────────────────────────────────────────────────────────────
+
+async def reset_users(telegram_ids: list[int]):
+    """Reset squad, budget, points for specific user(s)."""
+    sb = _get_sb()
+    for tid in telegram_ids:
+        try:
+            sb.table("users").update({
+                "budget_remaining": __import__("config").TOTAL_BUDGET,
+                "formation": "",
+                "captain": "",
+                "squad_submitted": "no",
+                "total_points": 0,
+            }).eq("telegram_id", tid).execute()
+            sb.table("squads").delete().eq("telegram_id", tid).execute()
+            _user_cache.pop(tid, None)
+            _squad_cache.pop(tid, None)
+        except Exception as e:
+            logger.error("reset_users error for %s: %s", tid, e)
+
+
+async def reset_campaign():
+    """
+    Full campaign reset — wipes all squads & transfers,
+    resets every user's budget/points/formation/captain/squad_submitted.
+    Users remain registered.
+    """
+    import config as _config
+    sb = _get_sb()
+    # Delete all squads and transfers
+    sb.table("squads").delete().neq("telegram_id", 0).execute()
+    sb.table("transfers").delete().neq("id", 0).execute()
+    # Reset every user
+    sb.table("users").update({
+        "budget_remaining": _config.TOTAL_BUDGET,
+        "formation": "",
+        "captain": "",
+        "squad_submitted": "no",
+        "total_points": 0,
+    }).neq("telegram_id", 0).execute()
+    # Clear all in-memory caches
+    _user_cache.clear()
+    _squad_cache.clear()
