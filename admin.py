@@ -8,7 +8,9 @@ import config
 import sheets
 from states import Admin
 from translations import t
-from inline import admin_menu_keyboard, admin_confirm_send_keyboard, admin_broadcast_type_keyboard, home_keyboard
+from inline import (admin_menu_keyboard, admin_confirm_send_keyboard,
+                    admin_broadcast_type_keyboard, home_keyboard,
+                    reset_type_keyboard, reset_campaign_confirm_keyboard)
 from helpers import get_lang
 
 logger = logging.getLogger(__name__)
@@ -175,7 +177,130 @@ async def show_pending(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(Command("promo"))
+@router.callback_query(F.data == "admin:back_menu")
+async def admin_back_menu(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    await callback.message.edit_text(
+        t(lang, "admin_menu"), parse_mode="HTML",
+        reply_markup=admin_menu_keyboard(lang)
+    )
+    await state.set_state(Admin.menu)
+    await callback.answer()
+
+
+# ── Reset panel ───────────────────────────────────────────────────────────────
+
+@router.message(Command("reset"))
+@router.callback_query(F.data == "admin:reset")
+async def admin_reset_panel(event, state: FSMContext):
+    user_id = event.from_user.id
+    if not is_admin(user_id):
+        if hasattr(event, "answer"):
+            await event.answer("Not authorized.", show_alert=True)
+        return
+    text = (
+        "🔄 <b>RESET PANEL</b>\n\n"
+        "<b>Reset user(s) by ID</b> — enter one or more Telegram IDs. "
+        "Wipes their squad, resets budget to €100M, clears points.\n\n"
+        "<b>Full campaign reset</b> — wipes ALL squads, ALL transfers, "
+        "resets every user. Players stay registered."
+    )
+    if hasattr(event, "message"):
+        await event.message.edit_text(text, parse_mode="HTML", reply_markup=reset_type_keyboard())
+        await event.answer()
+    else:
+        await event.answer(text, parse_mode="HTML", reply_markup=reset_type_keyboard())
+    await state.set_state(Admin.reset_menu)
+
+
+@router.callback_query(F.data == "reset:by_id", Admin.reset_menu)
+async def reset_ask_ids(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "📋 Send the Telegram ID(s) to reset.\n\n"
+        "One ID or multiple separated by commas:\n"
+        "<code>123456789</code>\n"
+        "<code>123456789, 987654321</code>",
+        parse_mode="HTML"
+    )
+    await state.set_state(Admin.get_reset_id)
+    await callback.answer()
+
+
+@router.message(Admin.get_reset_id)
+async def reset_do_users(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    raw = message.text.strip()
+    try:
+        ids = [int(x.strip()) for x in raw.split(",") if x.strip()]
+    except ValueError:
+        await message.answer("❌ Invalid IDs. Send numbers separated by commas.")
+        return
+
+    await message.answer(f"⏳ Resetting {len(ids)} user(s)...")
+    await sheets.reset_users(ids)
+
+    lines = []
+    for tid in ids:
+        u = await sheets.get_user(tid)
+        name = u.get("rolletto_username", str(tid)) if u else str(tid)
+        lines.append(f"✅ <b>{name}</b> (<code>{tid}</code>)")
+
+    await message.answer(
+        f"✅ Reset complete!\n\n" + "\n".join(lines) +
+        "\n\nBudget: €100M | Squad: cleared | Points: 0",
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data == "reset:campaign", Admin.reset_menu)
+async def reset_campaign_ask(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "⚠️ <b>FULL CAMPAIGN RESET</b>\n\n"
+        "This will:\n"
+        "• ❌ Delete <b>ALL squads</b>\n"
+        "• ❌ Clear <b>ALL transfers</b>\n"
+        "• 💰 Reset <b>ALL budgets</b> to €100M\n"
+        "• 📊 Reset <b>ALL points</b> to 0\n"
+        "• 🧹 Clear <b>ALL formations & captains</b>\n\n"
+        "Users stay registered. <b>This cannot be undone.</b>",
+        parse_mode="HTML",
+        reply_markup=reset_campaign_confirm_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "reset:campaign_confirm")
+async def reset_campaign_confirm(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    await callback.message.edit_text("⏳ Resetting campaign...", parse_mode="HTML")
+    try:
+        await sheets.reset_campaign()
+        await callback.message.edit_text(
+            "✅ <b>Campaign reset complete!</b>\n\n"
+            "All squads deleted, transfers cleared, budgets restored to €100M, points zeroed.\n\n"
+            "Users can now rebuild their squads from scratch.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Reset failed:\n<code>{e}</code>", parse_mode="HTML")
+    await state.clear()
+    await callback.answer()
+
+
 async def cmd_promo(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
