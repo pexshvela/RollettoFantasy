@@ -33,3 +33,5 @@ class Admin(StatesGroup):
     confirming_send    = State()
     get_promo_id       = State()
     get_promo_code     = State()
+    get_reset_id       = State()
+    reset_menu         = State()
