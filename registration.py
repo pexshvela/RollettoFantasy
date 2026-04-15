@@ -3,6 +3,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart, Command
+from aiogram.exceptions import TelegramBadRequest
 
 import config
 import sheets
@@ -147,10 +148,14 @@ async def go_home(callback: CallbackQuery, state: FSMContext):
     formation = user.get("formation", "") if user else ""
     submitted = (user.get("squad_submitted", "no") == "yes") if user else False
     text = build_home_text(lang, user, squad_data)
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=home_keyboard(lang, callback.from_user.id, submitted, bool(formation)),
-    )
+    try:
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=home_keyboard(lang, callback.from_user.id, submitted, bool(formation)),
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await state.set_state(Squad.home)
     await callback.answer()
