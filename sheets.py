@@ -157,8 +157,9 @@ def _update_user_sync(telegram_id: int, **kwargs):
 
 
 async def update_user(telegram_id: int, **kwargs):
+    import functools
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(_executor, _update_user_sync, telegram_id, **kwargs)
+    await loop.run_in_executor(_executor, functools.partial(_update_user_sync, telegram_id, **kwargs))
 
 
 # ── Squad ─────────────────────────────────────────────────────────────────────
