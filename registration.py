@@ -159,3 +159,37 @@ async def go_home(callback: CallbackQuery, state: FSMContext):
             raise
     await state.set_state(Squad.home)
     await callback.answer()
+
+
+@router.callback_query(F.data == "home:rules")
+async def show_rules(callback: CallbackQuery, state: FSMContext):
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    try:
+        await callback.message.edit_text(
+            t(lang, "rules_title"),
+            parse_mode="HTML",
+            reply_markup=kb.as_markup(),
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+    await callback.answer()
+
+@router.callback_query(F.data == "home:rules")
+async def show_rules(callback: CallbackQuery, state: FSMContext):
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    await callback.message.edit_text(
+        t(lang, "rules_title"),
+        parse_mode="HTML",
+        reply_markup=kb.as_markup(),
+    )
+    await callback.answer()
