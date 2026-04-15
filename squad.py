@@ -13,7 +13,7 @@ from players import get_player, fmt_price, get_by_position
 from inline import (
     formation_keyboard, squad_keyboard, player_list_keyboard,
     confirm_player_keyboard, captain_keyboard, confirm_submit_keyboard,
-    home_keyboard,
+    home_keyboard, slot_action_keyboard,
 )
 from helpers import build_squad_visual, build_home_text, get_lang, count_squad_filled
 
@@ -123,6 +123,20 @@ async def show_player_list(callback: CallbackQuery, state: FSMContext):
     squad_data = await sheets.get_squad(callback.from_user.id) or {}
     await state.update_data(current_slot=slot, current_position=position)
 
+    # If slot already has a player, show Replace / Remove options first
+    existing_pid = squad_data.get(slot)
+    if existing_pid:
+        p = get_player(existing_pid)
+        player_name = p["name"] if p else "this player"
+        await callback.message.edit_text(
+            f"👤 <b>{player_name}</b> is in this slot.\nWhat do you want to do?",
+            parse_mode="HTML",
+            reply_markup=slot_action_keyboard(lang, position, slot, existing_pid),
+        )
+        await state.set_state(Squad.selecting_player)
+        await callback.answer()
+        return
+
     # For sub slots (ANY), let user pick position first
     if position == "ANY":
         kb = InlineKeyboardBuilder()
@@ -149,6 +163,73 @@ async def show_player_list(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Squad.selecting_player)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("slot_replace:"))
+async def slot_replace(callback: CallbackQuery, state: FSMContext):
+    _, position, slot = callback.data.split(":", 2)
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    squad_data = await sheets.get_squad(callback.from_user.id) or {}
+    await state.update_data(current_slot=slot, current_position=position)
+
+    # For sub slots (ANY), let user pick position first
+    if position == "ANY":
+        kb = InlineKeyboardBuilder()
+        for pos, emoji in [("GK", "🧤"), ("DEF", "🔵"), ("MF", "🟡"), ("FW", "🔴")]:
+            kb.button(text=f"{emoji} {pos}", callback_data=f"subpos:{pos}:{slot}")
+        kb.button(text=t(lang, "back_home"), callback_data="squad:view")
+        kb.adjust(2)
+        await callback.message.edit_text(
+            "👇 Choose a position for this sub slot:",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(Squad.selecting_player)
+        await callback.answer()
+        return
+
+    all_p = get_by_position(position)
+    taken = {v for v in squad_data.values() if isinstance(v, str) and v and not v.startswith("4-")}
+    # Don't exclude the player currently in this slot — they're being replaced
+    taken.discard(squad_data.get(slot))
+    available = [p for p in all_p if p["id"] not in taken]
+    total_pages = max(1, -(-len(available) // 8))
+    await callback.message.edit_text(
+        t(lang, "pick_player", pos=position, page=1, total=total_pages),
+        parse_mode="HTML",
+        reply_markup=player_list_keyboard(lang, position, slot, 0, squad_data),
+    )
+    await state.set_state(Squad.selecting_player)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("slot_remove:"))
+async def slot_remove(callback: CallbackQuery, state: FSMContext):
+    slot = callback.data.split(":", 1)[1]
+    user = await sheets.get_user(callback.from_user.id)
+    lang = await get_lang(callback.from_user.id, user)
+    squad_data = await sheets.get_squad(callback.from_user.id) or {}
+
+    pid = squad_data.get(slot)
+    if pid:
+        p = get_player(pid)
+        budget = _safe_budget(user)
+        if p:
+            budget += p["price"]  # Refund the player's price
+            await sheets.update_user(callback.from_user.id, budget_remaining=budget)
+        # Clear captain if the removed player was captain
+        if squad_data.get("captain") == pid or (user or {}).get("captain") == pid:
+            squad_data["captain"] = ""
+            await sheets.update_user(callback.from_user.id, captain="")
+        squad_data.pop(slot, None)
+        await sheets.save_squad(callback.from_user.id, squad_data)
+
+    fresh_user = await sheets.get_user(callback.from_user.id)
+    await _show_squad(callback, fresh_user, squad_data, lang, state)
+    try:
+        await callback.answer("Player removed." if pid else "Slot already empty.")
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("subpos:"))
