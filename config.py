@@ -48,3 +48,7 @@ FORMATIONS = {
 }
 
 SUPPORTED_LANGUAGES = ["en", "it", "fr", "es"]
+# ── UCL RapidAPI ──────────────────────────────────────────────────────────────
+API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")
+API_FOOTBALL_HOST = os.getenv("API_FOOTBALL_HOST", "uefa-champions-league1.p.rapidapi.com")
+API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://uefa-champions-league1.p.rapidapi.com")
