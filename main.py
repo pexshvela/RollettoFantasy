@@ -31,11 +31,19 @@ async def main():
     dp.include_router(transfers.router)
     dp.include_router(admin.router)
 
-    logger.info("Initializing Google Sheets DB...")
+    logger.info("Initializing Supabase DB...")
     try:
         await sheets.init_db()
     except Exception as e:
         logger.error("DB init failed: %s — continuing anyway.", e)
+
+    # Start points scheduler as background task
+    if config.API_FOOTBALL_KEY:
+        from scheduler import run_scheduler
+        asyncio.create_task(run_scheduler(bot))
+        logger.info("Points scheduler started.")
+    else:
+        logger.warning("API_FOOTBALL_KEY not set — points scheduler disabled.")
 
     logger.info("Bot starting...")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
