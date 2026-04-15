@@ -26,6 +26,10 @@ FREE_TRANSFERS_PER_MATCHDAY = int(os.getenv("FREE_TRANSFERS_PER_MATCHDAY", "2"))
 EXTRA_TRANSFER_COST_PTS    = int(os.getenv("EXTRA_TRANSFER_COST_PTS", "4"))
 SQUAD_LOCK_HOURS_BEFORE    = int(os.getenv("SQUAD_LOCK_HOURS_BEFORE", "1"))
 
+# ── Supabase ─────────────────────────────────────────────────────────────────
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
 # ── Google credentials ────────────────────────────────────────────────────────
 _raw = os.getenv("GOOGLE_CREDENTIALS_JSON", "{}")
 try:
