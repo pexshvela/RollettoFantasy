@@ -54,19 +54,10 @@ def _parse_match_details(match_id: str, raw: dict) -> dict:
     home_team = home.get("name") or home.get("short_name") or "?"
     away_team = away.get("name") or away.get("short_name") or "?"
 
-    # Score — try multiple field locations
-    def _score(side: str) -> int:
-        val = raw.get(f"{side}_score")
-        if isinstance(val, dict):
-            return int(float(val.get("current") or val.get("normal_time") or 0))
-        if val is not None:
-            return int(float(val or 0))
-        # Some responses nest under "result"
-        result = raw.get("result") or {}
-        return int(float(result.get(f"{side}_team") or result.get(side) or 0))
-
-    home_score = _score("home")
-    away_score = _score("away")
+    # Score — confirmed: raw["scores"]["home"] and raw["scores"]["away"]
+    scores = raw.get("scores") or {}
+    home_score = int(float(scores.get("home") or scores.get("home_total") or 0))
+    away_score = int(float(scores.get("away") or scores.get("away_total") or 0))
 
     # Status — confirmed: raw.match_status.is_finished
     ms = raw.get("match_status") or {}
