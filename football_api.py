@@ -134,7 +134,7 @@ def _parse_player_stats(raw: dict) -> dict:
         stats_raw = p.get("stats") or {}
 
         def sv(key: str) -> int:
-            """Get integer value from ALL_CAPS stat key."""
+            """Get integer value from ALL_CAPS FlashScore stat key."""
             entry = stats_raw.get(key)
             if isinstance(entry, dict):
                 v = entry.get("raw_value") or entry.get("value") or 0
@@ -145,34 +145,46 @@ def _parse_player_stats(raw: dict) -> dict:
             except Exception:
                 return 0
 
-        # Goals: try multiple possible key names
-        goals = (sv("GOALS_SCORED") or sv("GOALS") or sv("GOAL") or
-                 sv("GOALS_OPEN_PLAY") + sv("GOALS_PENALTY") +
-                 sv("GOALS_OWN"))  # own goals don't count for player
+        # Goals: regular + penalty goals, exclude own goals
+        goals_open   = sv("GOALS_OPEN_PLAY") or sv("GOALS_SCORED") or sv("GOALS")
+        goals_penalty= sv("GOALS_PENALTY")
+        own_goals    = sv("GOALS_OWN") or sv("OWN_GOALS")
+        goals = max(0, goals_open + goals_penalty - own_goals)
 
-        # Exclude own goals from goals count
-        goals = max(0, goals - sv("GOALS_OWN"))
+        # Minutes — use MINUTES_PLAYED or assume 90 if in starting lineup
+        minutes = sv("MINUTES_PLAYED") or sv("MINUTES")
+        if not minutes and p.get("in_base_lineup"):
+            minutes = 90
 
-        # Minutes
-        minutes = sv("MINUTES_PLAYED") or sv("MINUTES") or (
-            90 if p.get("in_base_lineup") else 0
-        )
+        # Defensive actions for the +1 per 3 rule
+        tackles       = sv("TACKLES") or sv("TACKLE_TOTAL") or sv("TACKLES_WON")
+        interceptions = sv("INTERCEPTIONS") or sv("INTERCEPTION")
+        blocks        = sv("BLOCKED_SHOTS") or sv("CLEARANCES") or sv("BLOCKS")
 
         result[name.lower()] = {
-            "name":           name,
-            "team_id":        p.get("team_id", ""),
-            "position":       p.get("position", ""),
-            "is_goalkeeper":  bool(p.get("is_goalkeeper")),
-            "in_lineup":      bool(p.get("in_base_lineup")),
-            "goals":          goals,
-            "assists":        sv("ASSISTS_GOAL") or sv("ASSISTS"),
-            "yellow_cards":   sv("CARDS_YELLOW"),
-            "red_cards":      sv("CARDS_RED"),
-            "penalty_miss":   sv("PENALTIES_NOT_CONVERTED"),
-            "minutes_played": minutes,
-            "goals_conceded": 0,    # filled by scheduler from match score
-            "clean_sheet":    False, # filled by scheduler
-            "raw_stats":      {k: sv(k) for k in stats_raw},
+            "name":             name,
+            "team_id":          p.get("team_id", ""),
+            "position":         p.get("position", ""),
+            "is_goalkeeper":    bool(p.get("is_goalkeeper")),
+            "in_lineup":        bool(p.get("in_base_lineup")),
+            "goals":            goals,
+            "own_goals":        own_goals,
+            "assists":          sv("ASSISTS_GOAL") or sv("ASSISTS"),
+            "yellow_cards":     sv("CARDS_YELLOW"),
+            "red_cards":        sv("CARDS_RED"),
+            "yellow_then_red":  sv("CARDS_YELLOW_RED"),
+            "penalty_miss":     sv("PENALTIES_NOT_CONVERTED"),
+            "penalty_earned":   sv("PENALTIES_WON"),
+            "penalty_conceded": sv("PENALTIES_COMMITTED") or sv("PENALTIES_CONCEDED"),
+            "penalty_saved":    sv("PENALTIES_SAVED"),
+            "saves":            sv("SAVES") or sv("GOALKEEPER_SAVES") or sv("SHOTS_SAVED_TOTAL"),
+            "tackles":          tackles,
+            "interceptions":    interceptions,
+            "blocks":           blocks,
+            "minutes_played":   minutes,
+            "goals_conceded":   0,     # filled by scheduler
+            "clean_sheet":      False, # filled by scheduler
+            "raw_stats":        {k: sv(k) for k in stats_raw},
         }
 
     return result
