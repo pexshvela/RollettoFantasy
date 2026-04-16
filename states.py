@@ -35,3 +35,8 @@ class Admin(StatesGroup):
     get_promo_code     = State()
     get_reset_id       = State()
     reset_menu         = State()
+
+class Stats(StatesGroup):
+    viewing = State()
+    results = State()
+    player_detail = State()
