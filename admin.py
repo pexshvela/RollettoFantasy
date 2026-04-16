@@ -611,3 +611,79 @@ async def cmd_scores(message: Message, state: FSMContext):
 
     except Exception as e:
         await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("testflash"))
+async def cmd_testflash(message: Message, state: FSMContext):
+    """Test FlashScore API with the two confirmed endpoints."""
+    if not is_admin(message.from_user.id):
+        return
+
+    import aiohttp, config
+    headers = {
+        "x-rapidapi-host": "flashscore4.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type": "application/json",
+    }
+    await message.answer("🔄 Testing FlashScore API...")
+
+    # Test match details (known working match_id from RapidAPI docs)
+    test_id = "GCxZ2uHc"
+    async with aiohttp.ClientSession() as session:
+        for label, url in [
+            ("Match Details", f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/details?match_id={test_id}"),
+            ("Player Stats",  f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/player-stats?match_id={test_id}"),
+        ]:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                status = resp.status
+                text = await resp.text()
+            await message.answer(
+                f"📡 <b>{label}</b>\nHTTP: <code>{status}</code>\n<pre>{text[:1200]}</pre>",
+                parse_mode="HTML"
+            )
+
+
+@router.message(Command("testflash_search"))
+async def cmd_testflash_search(message: Message, state: FSMContext):
+    """Discover UCL tournament ID on FlashScore."""
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("🔄 Searching for UCL tournament ID...")
+    try:
+        results = await __import__('football_api').discover_ucl_id()
+        for ep, r in results.items():
+            await message.answer(
+                f"<code>{ep}</code>\nHTTP {r['status']}\n<pre>{r['preview'] or 'empty'}</pre>",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        await message.answer(f"❌ {e}")
+
+
+@router.message(Command("testmatch"))
+async def cmd_testmatch(message: Message, state: FSMContext):
+    """Test fetching details for a specific FlashScore match ID.
+    Usage: /testmatch GCxZ2uHc
+    """
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/testmatch &lt;match_id&gt;</code>", parse_mode="HTML")
+        return
+    mid = parts[1]
+    await message.answer(f"🔄 Fetching match <code>{mid}</code>...", parse_mode="HTML")
+    try:
+        from football_api import get_match_details, get_player_stats
+        details = await get_match_details(mid)
+        stats   = await get_player_stats(mid)
+        await message.answer(
+            f"<b>Match Details:</b>\n<pre>{str(details)[:1000]}</pre>",
+            parse_mode="HTML"
+        )
+        await message.answer(
+            f"<b>Player Stats ({len(stats or {})} players):</b>\n<pre>{str(stats)[:1000]}</pre>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"❌ {e}")
