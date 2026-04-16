@@ -1008,3 +1008,40 @@ async def show_admin_commands(callback: CallbackQuery, state: FSMContext):
         reply_markup=kb.as_markup()
     )
     await callback.answer()
+
+
+@router.message(Command("rawmatch"))
+async def cmd_rawmatch(message: Message, state: FSMContext):
+    """Show ALL keys in match details response to find score field."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/rawmatch &lt;match_id&gt;</code>", parse_mode="HTML")
+        return
+    mid = parts[1]
+    import aiohttp, config
+    headers = {
+        "x-rapidapi-host": "flashscore4.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type": "application/json",
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.get(
+            f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/details",
+            headers=headers, params={"match_id": mid},
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            raw = await resp.json()
+
+    # Show just the top-level keys and their values (not nested dicts)
+    lines = [f"🔑 <b>Top-level keys for {mid}:</b>\n"]
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            lines.append(f"<code>{k}</code>: {list(v.keys())}")
+        elif isinstance(v, list):
+            lines.append(f"<code>{k}</code>: list[{len(v)}]")
+        else:
+            lines.append(f"<code>{k}</code>: <b>{v}</b>")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
