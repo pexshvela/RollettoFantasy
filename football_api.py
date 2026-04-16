@@ -181,45 +181,79 @@ def _parse_player_stats(raw: dict) -> dict:
 # ── Match incidents (goals/cards timeline) ────────────────────────────────────
 
 async def get_match_incidents(match_id: str) -> list[dict]:
-    """Try to get goal/card events. Returns [] if endpoint doesn't exist."""
-    for ep in [
-        "/api/flashscore/v2/matches/match/incidents",
-        "/api/flashscore/v2/matches/incidents",
-    ]:
-        code, raw = await _get(ep, {"match_id": match_id})
-        if code == 200 and raw:
-            return _parse_incidents(raw)
+    """
+    Confirmed endpoint: /api/flashscore/v2/matches/match/summary
+    Returns list of events: [{minutes, team, description, players:[{name, type}]}]
+    """
+    code, raw = await _get("/api/flashscore/v2/matches/match/summary",
+                           {"match_id": match_id})
+    if code == 200 and raw:
+        return _parse_summary(raw)
     return []
 
 
-def _parse_incidents(raw: dict) -> list[dict]:
-    incidents = raw.get("incidents") or raw.get("events") or (
-        raw if isinstance(raw, list) else []
-    )
+def _parse_summary(raw) -> list[dict]:
+    """
+    Confirmed structure (list of events):
+    [{"minutes": "1", "team": "away", "description": "GOAL!...",
+      "players": [{"name": "Guler A.", "type": "Goal"}]}]
+    """
+    if isinstance(raw, dict):
+        items = raw.get("incidents") or raw.get("events") or raw.get("summary") or []
+    else:
+        items = raw if isinstance(raw, list) else []
+
     events = []
-    for inc in incidents:
-        itype = str(inc.get("incident_type") or inc.get("type") or "").lower()
-        if "goal" in itype:
-            t = "goal"
-        elif "yellow" in itype:
-            t = "yellow_card"
-        elif "red" in itype:
-            t = "red_card"
-        elif "penalty" in itype and "miss" in itype:
-            t = "penalty_miss"
-        else:
-            continue
+    for inc in items:
+        desc = str(inc.get("description") or "").lower()
+        players = inc.get("players") or []
+        minute = str(inc.get("minutes") or inc.get("minute") or "")
+        team = str(inc.get("team") or "").lower()  # "home" or "away"
 
-        player = (inc.get("player", {}).get("name") if isinstance(inc.get("player"), dict)
-                  else inc.get("player") or inc.get("player_name") or "")
-        assist = (inc.get("assist", {}).get("name") if isinstance(inc.get("assist"), dict)
-                  else inc.get("assist") or "")
-        is_home = inc.get("is_home") or inc.get("home")
-        team = "home" if str(is_home).lower() in ("true", "1") else "away"
-        minute = str(inc.get("time") or inc.get("minute") or inc.get("incident_time") or "")
+        # Determine event type from players list or description
+        for player_entry in players:
+            ptype = str(player_entry.get("type") or "").lower()
+            pname = player_entry.get("name") or ""
 
-        events.append({"type": t, "minute": minute,
-                        "player": player, "assist": assist, "team": team})
+            if ptype == "goal" or "goal" in ptype:
+                etype = "goal"
+            elif "yellow" in ptype or "yellow" in desc:
+                etype = "yellow_card"
+            elif "red" in ptype or ("red" in desc and "yellow" not in desc):
+                etype = "red_card"
+            elif "penalty" in ptype and "miss" in ptype:
+                etype = "penalty_miss"
+            else:
+                continue
+
+            # Assist: second player in list if type is Assist
+            assist = ""
+            for other in players:
+                if str(other.get("type") or "").lower() in ("assist", "goal assist"):
+                    assist = other.get("name") or ""
+                    break
+
+            events.append({
+                "type":   etype,
+                "minute": minute,
+                "player": pname,
+                "assist": assist,
+                "team":   team,
+            })
+            break  # one event per incident entry
+
+        # If no players list but description mentions goal/card
+        if not players:
+            if "goal" in desc:
+                events.append({"type": "goal", "minute": minute,
+                                "player": "", "assist": "", "team": team})
+            elif "yellow" in desc:
+                events.append({"type": "yellow_card", "minute": minute,
+                                "player": "", "assist": "", "team": team})
+            elif "red card" in desc:
+                events.append({"type": "red_card", "minute": minute,
+                                "player": "", "assist": "", "team": team})
+
     return events
 
 
