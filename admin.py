@@ -1264,10 +1264,20 @@ async def cmd_cleancache(message: Message, state: FSMContext):
     keywords = await sheets.get_tournament_keywords()
     all_matches = await sheets.get_recent_matches(days=60)
 
+    def _t_matches(tournament_name, kws):
+        t = tournament_name.lower()
+        for kw in kws:
+            kw_words = kw.lower().replace("-"," ").replace("_"," ")
+            if kw.lower() in t or kw_words in t:
+                return True
+            kw_parts = kw_words.split()
+            if len(kw_parts) == 1 and len(kw_parts[0]) > 5 and kw_parts[0] in t:
+                return True
+        return False
+
     to_delete = [
         m["match_id"] for m in all_matches
-        if not any(kw.lower() in (m.get("tournament") or "").lower()
-                   for kw in keywords)
+        if not _t_matches(m.get("tournament") or "", keywords)
     ]
 
     if not to_delete:
