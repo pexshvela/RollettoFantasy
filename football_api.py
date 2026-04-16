@@ -21,7 +21,15 @@ HEADERS = {
     "Content-Type":    "application/json",
 }
 
-UCL_URL_KEYWORDS = ["champions-league", "champions_league", "ucl"]
+UCL_URL_KEYWORDS = ["champions-league", "champions_league", "ucl"]  # default fallback
+
+async def get_active_keywords() -> list[str]:
+    """Get current tournament filter keywords from DB (or default)."""
+    try:
+        import sheets as _sheets
+        return await _sheets.get_tournament_keywords()
+    except Exception:
+        return UCL_URL_KEYWORDS
 
 
 async def _get(endpoint: str, params: dict = None) -> tuple[int, any]:
@@ -58,15 +66,16 @@ async def get_ucl_matches_by_date(date_str: str) -> list[dict]:
     tournaments = data if isinstance(data, list) else data.get("tournaments", [])
     ucl_matches = []
 
+    # Get active keywords from DB (admin-configurable via /settournaments)
+    active_keywords = await get_active_keywords()
+
     for tournament in tournaments:
         t_url = str(tournament.get("tournament_url") or "").lower()
         t_name = str(tournament.get("name") or "").lower()
 
-        is_ucl = (
-            any(kw in t_url for kw in UCL_URL_KEYWORDS) or
-            "champions" in t_name
-        )
-        if not is_ucl:
+        is_match = any(kw.lower() in t_url or kw.lower() in t_name
+                       for kw in active_keywords)
+        if not is_match:
             continue
 
         for m in (tournament.get("matches") or []):
