@@ -687,3 +687,324 @@ async def cmd_testmatch(message: Message, state: FSMContext):
         )
     except Exception as e:
         await message.answer(f"❌ {e}")
+
+
+# ── Manual match management ───────────────────────────────────────────────────
+
+@router.message(Command("addmatch"))
+async def cmd_addmatch(message: Message, state: FSMContext):
+    """
+    Admin — manually add a UCL match by FlashScore ID.
+    Get match ID from flashscore.com URL:
+      https://www.flashscore.com/match/AbCdEfGh/ → ID = AbCdEfGh
+
+    Usage: /addmatch AbCdEfGh
+    Bot fetches details + player stats, saves to cache, awards points to all users.
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer(
+            "📖 <b>How to add a UCL match:</b>\n\n"
+            "1. Go to <a href='https://www.flashscore.com'>flashscore.com</a>\n"
+            "2. Find the UCL match\n"
+            "3. Copy the 8-char ID from the URL:\n"
+            "   <code>flashscore.com/match/<b>AbCdEfGh</b>/</code>\n"
+            "4. Send: <code>/addmatch AbCdEfGh</code>\n\n"
+            "Bot will automatically:\n"
+            "• Fetch scores + player stats\n"
+            "• Calculate & award points to all users\n"
+            "• Broadcast match result",
+            parse_mode="HTML", disable_web_page_preview=True
+        )
+        return
+
+    match_id = parts[1].strip()
+    msg = await message.answer(f"🔄 Fetching match <code>{match_id}</code>...", parse_mode="HTML")
+
+    try:
+        from football_api import fetch_full_match
+        match = await fetch_full_match(match_id)
+
+        if not match:
+            await msg.edit_text(
+                f"❌ Could not fetch match <code>{match_id}</code>\n\n"
+                f"Check the ID is correct (from flashscore.com URL) and try again.",
+                parse_mode="HTML"
+            )
+            return
+
+        await msg.edit_text(
+            f"✅ Match found:\n\n"
+            f"⚽ <b>{match['home_team']} {match['home_score']} - "
+            f"{match['away_score']} {match['away_team']}</b>\n"
+            f"📅 {match['date']} | {match['status']}\n"
+            f"🏆 {match.get('tournament', 'Unknown tournament')}\n\n"
+            f"Found {len(match.get('player_stats') or {})} players\n"
+            f"Found {len(match.get('events') or [])} events\n\n"
+            f"⏳ Processing points for all users...",
+            parse_mode="HTML"
+        )
+
+        # Save to cache
+        await sheets.save_match_cache(match)
+
+        # Award points if match is finished
+        if match["status"] == "final" and match.get("player_stats"):
+            from scheduler import award_points
+            await award_points(match, match["player_stats"], message.bot)
+            await message.answer(
+                f"✅ <b>Done!</b> Points awarded to all users.\n"
+                f"Users have been notified.",
+                parse_mode="HTML"
+            )
+        elif match["status"] != "final":
+            await message.answer(
+                f"⚠️ Match is not finished yet (status: {match['status']}).\n"
+                f"Match saved to cache. Run /addmatch again after it ends.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"⚠️ Match saved but no player stats found.\n"
+                f"Try /addmatch {match_id} again in a few minutes.",
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error("addmatch error: %s", e)
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("listmatches"))
+async def cmd_listmatches(message: Message, state: FSMContext):
+    """Admin — list all cached UCL matches."""
+    if not is_admin(message.from_user.id):
+        return
+
+    matches = await sheets.get_recent_matches(days=60)  # show last 60 days
+    if not matches:
+        await message.answer("No matches in cache yet. Use /addmatch to add UCL matches.")
+        return
+
+    lines = ["📋 <b>Cached matches:</b>\n"]
+    for m in matches:
+        awarded = "✅" if m.get("points_awarded") else "⏳"
+        lines.append(
+            f"{awarded} <code>{m['match_id']}</code> "
+            f"| {m['home_team']} {m['home_score']}-{m['away_score']} {m['away_team']} "
+            f"| {m.get('match_date','?')}"
+        )
+    lines.append(
+        "\n✅ = points awarded | ⏳ = pending\n"
+        "Use /addmatch <id> to add or reprocess a match"
+    )
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("fixmatch"))
+async def cmd_fixmatch(message: Message, state: FSMContext):
+    """
+    Admin — reprocess a match that had wrong stats.
+    Usage: /fixmatch AbCdEfGh
+    Resets points_awarded flag and re-awards points.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/fixmatch &lt;match_id&gt;</code>", parse_mode="HTML")
+        return
+
+    match_id = parts[1]
+    await message.answer(f"🔄 Reprocessing match <code>{match_id}</code>...", parse_mode="HTML")
+    try:
+        from football_api import fetch_full_match
+        from scheduler import award_points
+        match = await fetch_full_match(match_id)
+        if not match:
+            await message.answer("❌ Could not fetch match.")
+            return
+        match["points_awarded"] = False
+        await sheets.save_match_cache(match)
+        if match["status"] == "final" and match.get("player_stats"):
+            await award_points(match, match["player_stats"], message.bot)
+            await message.answer("✅ Reprocessed. Points re-awarded to all users.")
+        else:
+            await message.answer(f"⚠️ Match status: {match['status']}. No points awarded.")
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+# ── Match watchlist ───────────────────────────────────────────────────────────
+
+@router.message(Command("schedulematch"))
+async def cmd_schedulematch(message: Message, state: FSMContext):
+    """
+    Add match ID(s) to watchlist. Bot checks every 5 min and auto-processes when finished.
+    Get IDs from flashscore.com URLs: flashscore.com/match/AbCdEfGh/
+
+    Usage:
+      /schedulematch AbCdEfGh
+      /schedulematch AbCdEfGh XyZw1234   (multiple at once)
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.strip().split()[1:]
+    if not parts:
+        await message.answer(
+            "📋 <b>Schedule match(es) for auto-processing:</b>\n\n"
+            "1. Go to <b>flashscore.com</b>\n"
+            "2. Find the UCL match → copy ID from URL:\n"
+            "   <code>flashscore.com/match/<b>AbCdEfGh</b>/</code>\n\n"
+            "3. Send: <code>/schedulematch AbCdEfGh</code>\n"
+            "   Multiple: <code>/schedulematch ID1 ID2 ID3</code>\n\n"
+            "Bot checks every 5 min — when match finishes:\n"
+            "✅ Fetches stats → awards points → broadcasts result\n\n"
+            "View watchlist: /watchlist\n"
+            "Cancel a match: /unwatch ID",
+            parse_mode="HTML", disable_web_page_preview=True
+        )
+        return
+
+    added = []
+    for mid in parts:
+        mid = mid.strip()
+        if not mid:
+            continue
+        await sheets.add_to_watchlist(mid)
+        added.append(f"<code>{mid}</code>")
+
+    await message.answer(
+        f"✅ Added {len(added)} match(es) to watchlist:\n"
+        + "\n".join(added) +
+        "\n\nBot will check every 5 min and auto-process when finished.",
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("watchlist"))
+async def cmd_watchlist(message: Message, state: FSMContext):
+    """Show current match watchlist."""
+    if not is_admin(message.from_user.id):
+        return
+
+    watchlist = await sheets.get_watchlist()
+    if not watchlist:
+        await message.answer(
+            "📋 Watchlist is empty.\n\n"
+            "Add matches with: /schedulematch ID1 ID2"
+        )
+        return
+
+    lines = [f"📋 <b>Watchlist ({len(watchlist)} match(es)):</b>\n"]
+    for w in watchlist:
+        lines.append(f"⏳ <code>{w['match_id']}</code> — added {str(w.get('added_at',''))[:10]}")
+
+    lines.append("\nBot checks every 5 min automatically.")
+    lines.append("Remove: /unwatch ID")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("unwatch"))
+async def cmd_unwatch(message: Message, state: FSMContext):
+    """Remove a match from watchlist."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/unwatch &lt;match_id&gt;</code>", parse_mode="HTML")
+        return
+    mid = parts[1]
+    await sheets.remove_from_watchlist(mid)
+    await message.answer(f"✅ Removed <code>{mid}</code> from watchlist.", parse_mode="HTML")
+
+
+# ── Admin Commands Reference ──────────────────────────────────────────────────
+
+ADMIN_COMMANDS = """📖 <b>ADMIN COMMANDS REFERENCE</b>
+
+━━━━━━━━━━━━━━━━━━━━
+⚽ <b>MATCH MANAGEMENT</b>
+━━━━━━━━━━━━━━━━━━━━
+
+/schedulematch ID1 ID2
+<i>Add match IDs to watchlist at start of match day.
+Bot checks every 5 min, auto-awards points when match finishes.
+Get IDs from flashscore.com/match/<b>ID</b>/</i>
+
+/watchlist
+<i>Show all matches currently being watched.</i>
+
+/unwatch ID
+<i>Remove a match from watchlist.</i>
+
+/addmatch ID
+<i>Manually add & process an already-finished match.
+Use when you forgot to schedule it beforehand.</i>
+
+/fixmatch ID
+<i>Reprocess a match (reset points_awarded and re-award).
+Use if stats were wrong the first time.</i>
+
+/listmatches
+<i>Show all cached matches (last 60 days) with their status.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🔄 <b>CAMPAIGN / USERS</b>
+━━━━━━━━━━━━━━━━━━━━
+
+/reset
+<i>Open reset panel:
+• Reset specific user(s) by Telegram ID
+• Full campaign reset (wipes all squads, points, transfers)</i>
+
+/promo
+<i>Send a promo code to a specific user by Telegram ID.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+📨 <b>MESSAGING</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Message User</b> (via Admin Panel button)
+<i>Send any message to a single user by Telegram ID.
+Supports text, photos, videos — no forwarded header.</i>
+
+<b>Broadcast</b> (via Admin Panel button)
+<i>Send a message to all users or a list of IDs.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🔬 <b>API TESTING</b>
+━━━━━━━━━━━━━━━━━━━━
+
+/testflash
+<i>Test FlashScore API with example match. Shows raw JSON.</i>
+
+/testmatch ID
+<i>Fetch & parse a specific match. Shows what bot extracts.</i>
+
+/testplayer ESPN_ID
+<i>Fetch a player by ESPN ID to verify mapping.</i>
+
+/testraw
+<i>Show raw /scores API response for debugging.</i>"""
+
+
+@router.callback_query(F.data == "admin:commands")
+async def show_admin_commands(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ Back to Admin", callback_data="admin:back_menu")
+    kb.adjust(1)
+    await callback.message.edit_text(
+        ADMIN_COMMANDS,
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await callback.answer()

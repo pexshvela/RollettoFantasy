@@ -254,6 +254,7 @@ def admin_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb.button(text=t(lang, "admin_broadcast"), callback_data="admin:broadcast")
     kb.button(text=t(lang, "admin_pending"),   callback_data="admin:pending")
     kb.button(text="🔄 Reset",                 callback_data="admin:reset")
+    kb.button(text="📖 Commands",              callback_data="admin:commands")
     kb.button(text=t(lang, "back_home"),       callback_data="home:back")
     kb.adjust(1)
     return kb.as_markup()

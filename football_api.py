@@ -1,11 +1,13 @@
 """
-football_api.py — FlashScore API wrapper
-Host: flashscore4.p.rapidapi.com
-Two confirmed endpoints:
+football_api.py — FlashScore API (flashscore4.p.rapidapi.com)
+
+Confirmed endpoints:
   GET /api/flashscore/v2/matches/details?match_id=X
   GET /api/flashscore/v2/matches/match/player-stats?match_id=X
 
-For listing UCL matches we probe several endpoints — use /testflash in bot to discover.
+No listing endpoint available — admin adds match IDs manually via /addmatch.
+Match IDs come from flashscore.com URLs:
+  https://www.flashscore.com/match/AbCdEfGh/ → match_id = AbCdEfGh
 """
 import logging
 import aiohttp
@@ -13,338 +15,238 @@ import config
 
 logger = logging.getLogger(__name__)
 
-BASE   = "https://flashscore4.p.rapidapi.com"
+BASE    = "https://flashscore4.p.rapidapi.com"
 HEADERS = {
     "x-rapidapi-host": "flashscore4.p.rapidapi.com",
     "x-rapidapi-key":  config.API_FOOTBALL_KEY,
-    "Content-Type": "application/json",
+    "Content-Type":    "application/json",
 }
 
-# UCL tournament ID on FlashScore — discovered via /testflash_search
-# Update this after running /testflash_search in the bot
-UCL_TOURNAMENT_ID = ""   # fill after discovery
-UCL_SEASON_ID     = ""   # fill after discovery
 
-
-async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | list | None]:
-    """Return (http_status, parsed_json)."""
+async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | None]:
     url = f"{BASE}/{endpoint.lstrip('/')}"
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(url, headers=HEADERS, params=params,
                              timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                status = resp.status
-                if status == 200:
-                    return status, await resp.json()
-                return status, None
+                if resp.status == 200:
+                    return 200, await resp.json()
+                return resp.status, None
     except Exception as e:
-        logger.error("FlashScore API error (%s): %s", endpoint, e)
+        logger.error("API error (%s): %s", endpoint, e)
         return 0, None
 
 
 # ── Match details ─────────────────────────────────────────────────────────────
 
 async def get_match_details(match_id: str) -> dict | None:
-    """
-    Returns normalized match dict:
-    {id, home_team, away_team, home_score, away_score, status, date, events}
-    events: [{type, minute, player, team, assist}]
-    """
-    status, data = await _get(
-        "/api/flashscore/v2/matches/details",
-        {"match_id": match_id}
-    )
-    if not data:
-        logger.error("get_match_details HTTP %s for %s", status, match_id)
+    code, raw = await _get("/api/flashscore/v2/matches/details", {"match_id": match_id})
+    if code != 200 or not raw:
+        logger.error("get_match_details HTTP %s for %s", code, match_id)
         return None
-    return _parse_match_details(match_id, data)
+    return _parse_match_details(match_id, raw)
 
 
 def _parse_match_details(match_id: str, raw: dict) -> dict:
-    """Flexible parser — handles multiple possible response structures."""
-    # Try common nesting patterns
-    m = (raw.get("match") or raw.get("event") or
-         raw.get("data", {}).get("match") or raw)
+    # Teams — FlashScore structure confirmed: raw.home_team.name
+    home = raw.get("home_team") or {}
+    away = raw.get("away_team") or {}
+    home_team = home.get("name") or home.get("short_name") or "?"
+    away_team = away.get("name") or away.get("short_name") or "?"
 
-    # Teams
-    home_team = (_nested(m, "homeTeam", "name") or
-                 _nested(m, "home", "name") or
-                 _nested(m, "teams", "home", "name") or "?")
-    away_team = (_nested(m, "awayTeam", "name") or
-                 _nested(m, "away", "name") or
-                 _nested(m, "teams", "away", "name") or "?")
+    # Score — try multiple field locations
+    def _score(side: str) -> int:
+        val = raw.get(f"{side}_score")
+        if isinstance(val, dict):
+            return int(float(val.get("current") or val.get("normal_time") or 0))
+        if val is not None:
+            return int(float(val or 0))
+        # Some responses nest under "result"
+        result = raw.get("result") or {}
+        return int(float(result.get(f"{side}_team") or result.get(side) or 0))
 
-    # Scores
-    home_score = int(_nested(m, "homeScore", "current") or
-                     _nested(m, "homeScore") or
-                     _nested(m, "score", "home") or 0)
-    away_score = int(_nested(m, "awayScore", "current") or
-                     _nested(m, "awayScore") or
-                     _nested(m, "score", "away") or 0)
+    home_score = _score("home")
+    away_score = _score("away")
 
-    # Status
-    raw_status = str(
-        _nested(m, "status", "type") or
-        _nested(m, "status", "description") or
-        _nested(m, "status") or
-        m.get("statusType") or ""
-    ).lower()
-    if any(x in raw_status for x in ["finish", "final", "ft", "ended", "complete"]):
+    # Status — confirmed: raw.match_status.is_finished
+    ms = raw.get("match_status") or {}
+    if ms.get("is_finished"):
         status = "final"
-    elif any(x in raw_status for x in ["progress", "live", "playing", "half"]):
+    elif ms.get("is_in_progress"):
+        status = "in_progress"
+    elif ms.get("is_started"):
         status = "in_progress"
     else:
         status = "scheduled"
 
-    # Date
-    import datetime
-    ts = m.get("startTimestamp") or m.get("timestamp") or m.get("date")
-    if ts and str(ts).isdigit():
-        date_str = datetime.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
+    # Date from Unix timestamp
+    ts = raw.get("timestamp")
+    if ts:
+        from datetime import datetime, timezone
+        date_str = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
     else:
-        date_str = str(ts or "")[:10]
-
-    # Events (goals, cards)
-    raw_events = (m.get("incidents") or m.get("events") or
-                  m.get("timeline") or [])
-    events = _parse_events(raw_events)
+        date_str = ""
 
     return {
-        "id":         match_id,
-        "home_team":  home_team,
-        "away_team":  away_team,
-        "home_score": home_score,
-        "away_score": away_score,
-        "status":     status,
-        "date":       date_str,
-        "events":     events,
-        "raw":        raw,   # kept for debugging
+        "id":            match_id,
+        "home_team":     home_team,
+        "away_team":     away_team,
+        "home_score":    home_score,
+        "away_score":    away_score,
+        "status":        status,
+        "date":          date_str,
+        "events":        [],   # filled by get_match_incidents if available
+        "home_team_id":  home.get("team_id", ""),
+        "away_team_id":  away.get("team_id", ""),
+        "tournament":    (raw.get("tournament") or {}).get("name", ""),
     }
-
-
-def _parse_events(raw_events: list) -> list:
-    events = []
-    for e in raw_events:
-        etype = str(
-            e.get("incidentType") or e.get("type") or e.get("eventType") or ""
-        ).lower()
-
-        if any(x in etype for x in ["goal", "score"]):
-            t = "goal"
-        elif "yellow" in etype or etype == "card":
-            t = "yellow_card"
-        elif "red" in etype:
-            t = "red_card"
-        elif "penalty" in etype and "miss" in etype:
-            t = "penalty_miss"
-        else:
-            continue
-
-        # Player name — try several field paths
-        player = (e.get("player", {}).get("name") if isinstance(e.get("player"), dict)
-                  else e.get("player") or e.get("playerName") or
-                  _nested(e, "player1", "name") or "")
-
-        assist = (e.get("assist", {}).get("name") if isinstance(e.get("assist"), dict)
-                  else e.get("assist") or e.get("assistName") or "")
-
-        team_side = str(e.get("isHome") or e.get("team") or "").lower()
-        team = "home" if team_side in ("true", "1", "home") else "away"
-
-        minute = str(e.get("time") or e.get("minute") or e.get("incidentTime") or "")
-
-        events.append({
-            "type": t, "minute": minute,
-            "player": player, "assist": assist, "team": team,
-        })
-    return events
 
 
 # ── Player stats ──────────────────────────────────────────────────────────────
 
 async def get_player_stats(match_id: str) -> dict | None:
-    """
-    Returns {player_name_lower: stats_dict} for all players in the match.
-    stats_dict keys: goals, assists, yellow_cards, red_cards,
-                     penalty_miss, minutes_played, goals_conceded
-    """
-    status, data = await _get(
-        "/api/flashscore/v2/matches/match/player-stats",
-        {"match_id": match_id}
-    )
-    if not data:
-        logger.error("get_player_stats HTTP %s for %s", status, match_id)
+    code, raw = await _get("/api/flashscore/v2/matches/match/player-stats",
+                           {"match_id": match_id})
+    if code != 200 or not raw:
+        logger.error("get_player_stats HTTP %s for %s", code, match_id)
         return None
-    return _parse_player_stats(data)
+    return _parse_player_stats(raw)
 
 
 def _parse_player_stats(raw: dict) -> dict:
+    """
+    Confirmed structure:
+    {"players": [{
+        "name": "Nyland Orjan",
+        "team_id": "h8oAv4Ts",
+        "position": "Goalkeeper",
+        "is_goalkeeper": true,
+        "in_base_lineup": true,
+        "stats": {
+            "CARDS_YELLOW":           {"raw_value": "0"},
+            "CARDS_RED":              {"raw_value": "0"},
+            "ASSISTS_GOAL":           {"raw_value": "0"},
+            "PENALTIES_NOT_CONVERTED":{"raw_value": "0"},
+            "GOALS_PENALTY":          {"raw_value": "0"},
+            ...
+        }
+    }]}
+    """
+    players_raw = raw.get("players") or []
     result = {}
 
-    # Try to find player lists for home and away
-    home_players = (
-        _nested(raw, "homeTeam", "players") or
-        _nested(raw, "home", "players") or
-        _nested(raw, "data", "home", "players") or
-        _nested(raw, "response", "home", "players") or []
-    )
-    away_players = (
-        _nested(raw, "awayTeam", "players") or
-        _nested(raw, "away", "players") or
-        _nested(raw, "data", "away", "players") or
-        _nested(raw, "response", "away", "players") or []
-    )
-
-    # Also try flat list
-    all_players = home_players + away_players
-    if not all_players:
-        flat = raw.get("players") or raw.get("data") or []
-        if isinstance(flat, list):
-            all_players = flat
-
-    for p in all_players:
-        name = (p.get("name") or p.get("playerName") or
-                _nested(p, "player", "name") or "").strip()
+    for p in players_raw:
+        name = (p.get("name") or "").strip()
         if not name:
             continue
 
-        stats_raw = p.get("stats") or p.get("statistics") or p.get("playerStats") or {}
+        stats_raw = p.get("stats") or {}
 
-        # stats can be list of {name, value} or a dict
-        if isinstance(stats_raw, list):
-            stats = {}
-            for s in stats_raw:
-                k = str(s.get("name") or s.get("key") or "").lower().replace(" ", "_")
-                v = s.get("value") or s.get("displayValue") or 0
-                try:
-                    stats[k] = int(float(v))
-                except Exception:
-                    stats[k] = 0
-        else:
-            stats = {k.lower().replace(" ", "_"): _safe_int(v)
-                     for k, v in stats_raw.items()}
+        def sv(key: str) -> int:
+            """Get integer value from ALL_CAPS stat key."""
+            entry = stats_raw.get(key)
+            if isinstance(entry, dict):
+                v = entry.get("raw_value") or entry.get("value") or 0
+            else:
+                v = entry or 0
+            try:
+                return int(float(v))
+            except Exception:
+                return 0
+
+        # Goals: try multiple possible key names
+        goals = (sv("GOALS_SCORED") or sv("GOALS") or sv("GOAL") or
+                 sv("GOALS_OPEN_PLAY") + sv("GOALS_PENALTY") +
+                 sv("GOALS_OWN"))  # own goals don't count for player
+
+        # Exclude own goals from goals count
+        goals = max(0, goals - sv("GOALS_OWN"))
+
+        # Minutes
+        minutes = sv("MINUTES_PLAYED") or sv("MINUTES") or (
+            90 if p.get("in_base_lineup") else 0
+        )
 
         result[name.lower()] = {
             "name":           name,
-            "goals":          stats.get("goals") or stats.get("goal") or 0,
-            "assists":        stats.get("assists") or stats.get("assist") or 0,
-            "yellow_cards":   stats.get("yellow_cards") or stats.get("yellowcard") or stats.get("yellow") or 0,
-            "red_cards":      stats.get("red_cards") or stats.get("redcard") or stats.get("red") or 0,
-            "penalty_miss":   stats.get("penalty_miss") or stats.get("penaltymissed") or 0,
-            "minutes_played": stats.get("minutes_played") or stats.get("minutesplayed") or stats.get("time_played") or 90,
-            "goals_conceded": stats.get("goals_conceded") or stats.get("goalsconceded") or 0,
-            "raw_stats":      stats,
+            "team_id":        p.get("team_id", ""),
+            "position":       p.get("position", ""),
+            "is_goalkeeper":  bool(p.get("is_goalkeeper")),
+            "in_lineup":      bool(p.get("in_base_lineup")),
+            "goals":          goals,
+            "assists":        sv("ASSISTS_GOAL") or sv("ASSISTS"),
+            "yellow_cards":   sv("CARDS_YELLOW"),
+            "red_cards":      sv("CARDS_RED"),
+            "penalty_miss":   sv("PENALTIES_NOT_CONVERTED"),
+            "minutes_played": minutes,
+            "goals_conceded": 0,    # filled by scheduler from match score
+            "clean_sheet":    False, # filled by scheduler
+            "raw_stats":      {k: sv(k) for k in stats_raw},
         }
 
     return result
 
 
-# ── Match listing ─────────────────────────────────────────────────────────────
+# ── Match incidents (goals/cards timeline) ────────────────────────────────────
 
-async def get_ucl_matches(days_back: int = 2) -> list[dict]:
-    """
-    Try several endpoints to get recent UCL matches.
-    Returns list of {id, home_team, away_team, home_score, away_score, status, date}
-    """
-    from datetime import date, timedelta
-    today = date.today()
-
-    # Endpoints to try in order
-    attempts = [
-        ("/api/flashscore/v2/category/tournament/matches",
-         {"tournament_id": UCL_TOURNAMENT_ID, "season_id": UCL_SEASON_ID}),
-        ("/api/flashscore/v2/matches",
-         {"tournament_id": UCL_TOURNAMENT_ID}),
-        ("/api/flashscore/v2/tournament/matches",
-         {"tournament_id": UCL_TOURNAMENT_ID}),
-    ]
-
-    for endpoint, params in attempts:
-        if not UCL_TOURNAMENT_ID:
-            break  # need to discover ID first
-        code, data = await _get(endpoint, params)
-        if code == 200 and data:
-            return _extract_match_list(data, today, days_back)
-
-    # Fallback: try date-based endpoints
-    matches = []
-    for i in range(days_back + 1):
-        d = (today - timedelta(days=i)).strftime("%Y%m%d")
-        for ep in [f"/api/flashscore/v2/matches/{d}",
-                   f"/api/flashscore/v2/matches",
-                   f"/api/flashscore/v2/livescore"]:
-            code, data = await _get(ep, {"date": d, "sport": "football"})
-            if code == 200 and data:
-                found = _extract_match_list(data, today, days_back, ucl_only=True)
-                matches.extend(found)
-                break
-
-    return matches
+async def get_match_incidents(match_id: str) -> list[dict]:
+    """Try to get goal/card events. Returns [] if endpoint doesn't exist."""
+    for ep in [
+        "/api/flashscore/v2/matches/match/incidents",
+        "/api/flashscore/v2/matches/incidents",
+    ]:
+        code, raw = await _get(ep, {"match_id": match_id})
+        if code == 200 and raw:
+            return _parse_incidents(raw)
+    return []
 
 
-def _extract_match_list(data, today, days_back: int, ucl_only: bool = False) -> list:
-    from datetime import timedelta
-    cutoff = (today - timedelta(days=days_back)).isoformat()
-
-    raw_list = (data.get("events") or data.get("matches") or
-                data.get("data") or (data if isinstance(data, list) else []))
-
-    results = []
-    UCL_KEYWORDS = {"champions league", "ucl", "uefa cl"}
-
-    for m in raw_list:
-        # Filter to UCL if needed
-        if ucl_only:
-            tournament = str(
-                _nested(m, "tournament", "name") or
-                _nested(m, "competition", "name") or
-                m.get("league", "") or ""
-            ).lower()
-            if not any(kw in tournament for kw in UCL_KEYWORDS):
-                continue
-
-        match_id = str(m.get("id") or m.get("matchId") or m.get("eventId") or "")
-        if not match_id:
+def _parse_incidents(raw: dict) -> list[dict]:
+    incidents = raw.get("incidents") or raw.get("events") or (
+        raw if isinstance(raw, list) else []
+    )
+    events = []
+    for inc in incidents:
+        itype = str(inc.get("incident_type") or inc.get("type") or "").lower()
+        if "goal" in itype:
+            t = "goal"
+        elif "yellow" in itype:
+            t = "yellow_card"
+        elif "red" in itype:
+            t = "red_card"
+        elif "penalty" in itype and "miss" in itype:
+            t = "penalty_miss"
+        else:
             continue
 
-        parsed = _parse_match_details(match_id, {"match": m})
-        if parsed["date"] >= cutoff:
-            results.append(parsed)
+        player = (inc.get("player", {}).get("name") if isinstance(inc.get("player"), dict)
+                  else inc.get("player") or inc.get("player_name") or "")
+        assist = (inc.get("assist", {}).get("name") if isinstance(inc.get("assist"), dict)
+                  else inc.get("assist") or "")
+        is_home = inc.get("is_home") or inc.get("home")
+        team = "home" if str(is_home).lower() in ("true", "1") else "away"
+        minute = str(inc.get("time") or inc.get("minute") or inc.get("incident_time") or "")
 
-    return results
-
-
-# ── Discovery helpers (for /testflash_search) ─────────────────────────────────
-
-async def discover_ucl_id() -> dict:
-    """Try to find UCL tournament ID. Returns raw responses for inspection."""
-    results = {}
-    for ep, params in [
-        ("/api/flashscore/v2/search", {"q": "champions league"}),
-        ("/api/flashscore/v2/category/search", {"name": "champions league"}),
-        ("/api/flashscore/v2/tournaments", {"category": "football"}),
-        ("/api/flashscore/v2/sports/football/tournaments", {}),
-    ]:
-        code, data = await _get(ep, params)
-        results[ep] = {"status": code, "preview": str(data)[:300] if data else None}
-    return results
+        events.append({"type": t, "minute": minute,
+                        "player": player, "assist": assist, "team": team})
+    return events
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Full match fetch (details + stats + incidents) ────────────────────────────
 
-def _nested(d: dict, *keys):
-    """Safely navigate nested dict."""
-    cur = d
-    for k in keys:
-        if isinstance(cur, dict):
-            cur = cur.get(k)
-        else:
-            return None
-    return cur
+async def fetch_full_match(match_id: str) -> dict | None:
+    """
+    Fetch everything about a match in one call.
+    Returns enriched match dict ready for save_match_cache.
+    """
+    details = await get_match_details(match_id)
+    if not details:
+        return None
 
+    stats   = await get_player_stats(match_id)
+    events  = await get_match_incidents(match_id)
 
-def _safe_int(val) -> int:
-    try:
-        return int(float(val or 0))
-    except Exception:
-        return 0
+    details["player_stats"] = stats or {}
+    details["events"]       = events
+
+    return details

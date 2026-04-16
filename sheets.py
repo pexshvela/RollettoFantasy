@@ -439,3 +439,41 @@ async def get_squad_points_summary(telegram_id: int) -> dict[str, int]:
     except Exception as e:
         logger.error("get_squad_points_summary error: %s", e)
         return {}
+
+
+# ── Match watchlist ───────────────────────────────────────────────────────────
+
+async def add_to_watchlist(match_id: str):
+    try:
+        _get_sb().table("match_watchlist").upsert({
+            "match_id": match_id,
+            "processed": False,
+        }).execute()
+    except Exception as e:
+        logger.error("add_to_watchlist error: %s", e)
+
+
+async def get_watchlist() -> list[dict]:
+    """Get all unprocessed matches from watchlist."""
+    try:
+        res = _get_sb().table("match_watchlist").select("*").eq("processed", False).execute()
+        return res.data or []
+    except Exception as e:
+        logger.error("get_watchlist error: %s", e)
+        return []
+
+
+async def mark_watchlist_processed(match_id: str):
+    try:
+        _get_sb().table("match_watchlist").update(
+            {"processed": True}
+        ).eq("match_id", match_id).execute()
+    except Exception as e:
+        logger.error("mark_watchlist_processed error: %s", e)
+
+
+async def remove_from_watchlist(match_id: str):
+    try:
+        _get_sb().table("match_watchlist").delete().eq("match_id", match_id).execute()
+    except Exception as e:
+        logger.error("remove_from_watchlist error: %s", e)
