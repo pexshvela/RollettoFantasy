@@ -108,27 +108,63 @@ async def award_points(match: dict, player_stats_raw: dict, bot=None):
     home_team_id = match.get("home_team_id", "")
     away_team_id = match.get("away_team_id", "")
 
-    # Map FlashScore player names → bot player IDs
+    # Build team_id -> side map
+    team_side: dict[str, str] = {}
+    if home_team_id:
+        team_side[home_team_id] = "home"
+    if away_team_id:
+        team_side[away_team_id] = "away"
+
+    def _side_for_bot_team(bot_team: str) -> str:
+        if _team_matches(bot_team, home_team): return "home"
+        if _team_matches(bot_team, away_team): return "away"
+        return ""
+
+    home_bot_players = {pid: p for pid, p in ALL_PLAYERS.items()
+                        if _team_matches(p["team"], home_team)}
+    away_bot_players = {pid: p for pid, p in ALL_PLAYERS.items()
+                        if _team_matches(p["team"], away_team)}
+
     player_stats: dict[str, dict] = {}
+
     for name_lower, stats in player_stats_raw.items():
-        bot_player = get_player_by_espn_name(stats.get("name", name_lower))
-        if not bot_player:
-            last = name_lower.split()[-1] if name_lower else ""
-            if last:
-                bot_player = get_player_by_espn_name(last)
+        api_name    = stats.get("name", "")
+        api_team_id = stats.get("team_id", "")
+        side        = team_side.get(api_team_id, "")
+
+        # 1. Name match
+        bot_player = get_player_by_espn_name(api_name)
+        if bot_player:
+            bp_side = _side_for_bot_team(bot_player["team"])
+            if side and bp_side and bp_side != side:
+                bot_player = None  # wrong team
+
+        # 2. Team + partial name fallback
+        if not bot_player and side:
+            candidates = home_bot_players if side == "home" else away_bot_players
+            import unicodedata
+            def norm(s):
+                return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower()
+            api_parts = {norm(p.strip(".")) for p in api_name.replace(".", " ").split() if len(p.strip(".")) > 2}
+            for pid, bp in candidates.items():
+                if pid in player_stats:
+                    continue
+                bp_parts = {norm(p) for p in bp["name"].split() if len(p) > 2}
+                if api_parts & bp_parts:
+                    bot_player = bp
+                    break
 
         if bot_player:
-            # Set clean sheet based on team + final score
-            pid_team = bot_player["team"]
-            if _team_matches(pid_team, home_team) or stats.get("team_id") == home_team_id:
+            bp_side = _side_for_bot_team(bot_player["team"]) or side
+            if bp_side == "home":
                 stats["goals_conceded"] = away_score
-                stats["clean_sheet"] = away_score == 0
-            elif _team_matches(pid_team, away_team) or stats.get("team_id") == away_team_id:
+                stats["clean_sheet"]    = away_score == 0
+            elif bp_side == "away":
                 stats["goals_conceded"] = home_score
-                stats["clean_sheet"] = home_score == 0
+                stats["clean_sheet"]    = home_score == 0
             player_stats[bot_player["id"]] = stats
 
-    logger.info("Matched %d/%d players for %s vs %s",
+    logger.info("Matched %d/%d API players for %s vs %s",
                 len(player_stats), len(player_stats_raw), home_team, away_team)
 
     users = await sheets.get_all_users()
@@ -168,41 +204,11 @@ async def award_points(match: dict, player_stats_raw: dict, bot=None):
             if stats is None:
                 continue
 
-            p_obj = ALL_PLAYERS.get(pid)
-            position = p_obj.get("position", "FW") if p_obj else "FW"
             is_captain = pid == captain_id
-
-            raw_pts = calc_player_points(pid, stats)
-            final_pts = raw_pts * 2 if is_captain else raw_pts
-
-            # Build readable breakdown
-            goals_pts = stats.get("goals", 0) * (10 if position in ("GK","DEF") else 5)
-            assists_pts = stats.get("assists", 0) * 3
-            yellow_pts = stats.get("yellow_cards", 0) * -1
-            red_pts = stats.get("red_cards", 0) * -3
-            pm_pts = stats.get("penalty_miss", 0) * -2
-            cs_pts = (4 if stats.get("clean_sheet") and position in ("GK","DEF")
-                      and int(stats.get("minutes_played", 90) or 90) >= 60 else 0)
-
-            breakdown = {
-                "goals":              stats.get("goals", 0),
-                "goals_pts":          goals_pts,
-                "assists":            stats.get("assists", 0),
-                "assists_pts":        assists_pts,
-                "yellow_cards":       stats.get("yellow_cards", 0),
-                "yellow_pts":         yellow_pts,
-                "red_cards":          stats.get("red_cards", 0),
-                "red_pts":            red_pts,
-                "penalty_miss":       stats.get("penalty_miss", 0),
-                "pm_pts":             pm_pts,
-                "clean_sheet":        bool(stats.get("clean_sheet")),
-                "cs_pts":             cs_pts,
-                "captain_multiplier": 2 if is_captain else 1,
-                "base_pts":           raw_pts,
-                "total":              final_pts,
-                "match": (f"{match['home_team']} {match['home_score']}"
-                          f"-{match['away_score']} {match['away_team']}"),
-            }
+            breakdown  = build_breakdown(pid, stats, is_captain)
+            breakdown["match"] = (f"{match['home_team']} {match['home_score']}"
+                                  f"-{match['away_score']} {match['away_team']}")
+            final_pts  = breakdown.get("total", 0)
 
             await sheets.save_player_match_points(uid, pid, mid, final_pts, breakdown)
 
