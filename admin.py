@@ -1084,3 +1084,45 @@ async def cmd_testincidents(message: Message, state: FSMContext):
                 f"<code>{ep.split('?')[0]}</code>\n{preview}",
                 parse_mode="HTML"
             )
+
+
+@router.message(Command("testlineup"))
+async def cmd_testlineup(message: Message, state: FSMContext):
+    """Test lineups + list-by-date endpoints."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    mid = parts[1] if len(parts) >= 2 else "zXC8QVx3"
+
+    import aiohttp, config, json
+    from datetime import date
+    headers = {
+        "x-rapidapi-host": "flashscore4.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type": "application/json",
+    }
+
+    async with aiohttp.ClientSession() as s:
+        # Test lineups
+        url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/lineups"
+        async with s.get(url, headers=headers, params={"match_id": mid},
+                         timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            status = resp.status
+            text = await resp.text()
+        await message.answer(
+            f"📋 <b>Lineups HTTP {status}</b>\n<pre>{text[:2000]}</pre>",
+            parse_mode="HTML"
+        )
+
+        # Test list-by-date
+        today = date.today().isoformat()
+        url2 = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/list-by-date"
+        async with s.get(url2, headers=headers,
+                         params={"sport_id": "1", "date": today, "timezone": "Europe/Berlin"},
+                         timeout=aiohttp.ClientTimeout(total=15)) as resp2:
+            status2 = resp2.status
+            text2 = await resp2.text()
+        await message.answer(
+            f"📅 <b>List-by-date ({today}) HTTP {status2}</b>\n<pre>{text2[:2000]}</pre>",
+            parse_mode="HTML"
+        )
