@@ -1253,3 +1253,36 @@ async def cmd_tournaments(message: Message, state: FSMContext):
         f"\n\nChange with: /settournaments ucl pl el",
         parse_mode="HTML"
     )
+
+
+@router.message(Command("cleancache"))
+async def cmd_cleancache(message: Message, state: FSMContext):
+    """Remove non-UCL matches from match_cache that don't match active keywords."""
+    if not is_admin(message.from_user.id):
+        return
+
+    keywords = await sheets.get_tournament_keywords()
+    all_matches = await sheets.get_recent_matches(days=60)
+
+    to_delete = [
+        m["match_id"] for m in all_matches
+        if not any(kw.lower() in (m.get("tournament") or "").lower()
+                   for kw in keywords)
+    ]
+
+    if not to_delete:
+        await message.answer("✅ Cache is already clean — no non-matching matches found.")
+        return
+
+    sb = sheets._get_sb()
+    for mid in to_delete:
+        try:
+            sb.table("match_cache").delete().eq("match_id", mid).execute()
+        except Exception as e:
+            logger.error("cleancache delete error %s: %s", mid, e)
+
+    await message.answer(
+        f"✅ Removed <b>{len(to_delete)}</b> non-matching match(es) from cache.\n\n"
+        f"Active filter: {', '.join(f'<code>{k}</code>' for k in keywords)}",
+        parse_mode="HTML"
+    )
