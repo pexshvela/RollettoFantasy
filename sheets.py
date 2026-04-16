@@ -477,3 +477,38 @@ async def remove_from_watchlist(match_id: str):
         _get_sb().table("match_watchlist").delete().eq("match_id", match_id).execute()
     except Exception as e:
         logger.error("remove_from_watchlist error: %s", e)
+
+
+# ── Bot settings (key-value store) ────────────────────────────────────────────
+
+async def get_setting(key: str, default=None):
+    """Get a bot setting from Supabase. Falls back to default."""
+    try:
+        res = _get_sb().table("bot_settings").select("value").eq("key", key).execute()
+        if res.data:
+            import json
+            try:
+                return json.loads(res.data[0]["value"])
+            except Exception:
+                return res.data[0]["value"]
+    except Exception:
+        pass
+    return default
+
+
+async def set_setting(key: str, value):
+    """Save a bot setting to Supabase."""
+    import json
+    try:
+        _get_sb().table("bot_settings").upsert({
+            "key": key,
+            "value": json.dumps(value) if not isinstance(value, str) else value
+        }).execute()
+    except Exception as e:
+        logger.error("set_setting error: %s", e)
+
+
+async def get_tournament_keywords() -> list[str]:
+    """Get current tournament filter keywords."""
+    import config
+    return await get_setting("tournament_keywords", config.DEFAULT_TOURNAMENT_KEYWORDS)
