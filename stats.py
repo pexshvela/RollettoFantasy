@@ -162,6 +162,20 @@ async def show_player_stats(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# ── Tournament matching helper ───────────────────────────────────────────────
+
+def _tournament_matches(tournament_name: str, keywords: list) -> bool:
+    t = tournament_name.lower()
+    for kw in keywords:
+        kw_words = kw.lower().replace("-", " ").replace("_", " ")
+        if kw.lower() in t or kw_words in t:
+            return True
+        kw_parts = kw_words.split()
+        if len(kw_parts) == 1 and len(kw_parts[0]) > 5 and kw_parts[0] in t:
+            return True
+    return False
+
+
 # ── Match Results ─────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "home:results")
@@ -177,8 +191,7 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     if keywords:
         matches = [
             m for m in all_matches
-            if any(kw.lower() in (m.get("tournament") or "").lower()
-                   for kw in keywords)
+            if _tournament_matches(m.get("tournament") or "", keywords)
         ]
     else:
         matches = all_matches
