@@ -361,3 +361,139 @@ async def send_promo(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"❌ Failed to send: {e}")
     await state.clear()
     await callback.answer()
+
+
+# ── API Test Commands ─────────────────────────────────────────────────────────
+
+@router.message(Command("testapi"))
+async def cmd_testapi(message: Message, state: FSMContext):
+    """Admin only — fetch live UCL scores and show raw result."""
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🔄 Fetching UCL scores from API...")
+
+    try:
+        from football_api import get_scores
+        matches = await get_scores()
+
+        if not matches:
+            await message.answer(
+                "⚠️ API returned 0 matches.\n\n"
+                "Possible reasons:\n"
+                "• No UCL matches today\n"
+                "• API key wrong/expired\n"
+                "• API response format changed\n\n"
+                "Use /testraw to see the raw API response."
+            )
+            return
+
+        lines = [f"✅ <b>API working — {len(matches)} match(es) found:</b>\n"]
+        for m in matches:
+            status_emoji = {"final": "✅", "in_progress": "🔴", "scheduled": "⏳"}.get(m["status"], "❓")
+            lines.append(
+                f"{status_emoji} <b>{m['homeTeam']}</b> {m['homeScore']} - "
+                f"{m['awayScore']} <b>{m['awayTeam']}</b>\n"
+                f"   Status: <code>{m['status']}</code> | ID: <code>{m['id']}</code>"
+            )
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("testraw"))
+async def cmd_testraw(message: Message, state: FSMContext):
+    """Admin only — show raw API response for debugging."""
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🔄 Fetching raw API response...")
+
+    try:
+        import aiohttp
+        import config
+
+        headers = {
+            "x-rapidapi-host": config.API_FOOTBALL_HOST,
+            "x-rapidapi-key": config.API_FOOTBALL_KEY,
+        }
+        url = f"{config.API_FOOTBALL_BASE}/scores"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                status = resp.status
+                text = await resp.text()
+
+        # Truncate if too long for Telegram
+        preview = text[:3000] + ("..." if len(text) > 3000 else "")
+        await message.answer(
+            f"📡 <b>Raw API response</b>\n"
+            f"URL: <code>{url}</code>\n"
+            f"HTTP Status: <code>{status}</code>\n\n"
+            f"<pre>{preview}</pre>",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("testplayer"))
+async def cmd_testplayer(message: Message, state: FSMContext):
+    """Admin only — test fetching a specific player by ESPN ID.
+    Usage: /testplayer 193232  (Alisson's ESPN ID)
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer(
+            "Usage: <code>/testplayer &lt;espn_id&gt;</code>\n\n"
+            "Example: <code>/testplayer 193232</code> (Alisson)\n\n"
+            "<b>Key player IDs to test:</b>\n"
+            "193232 — Alisson\n"
+            "199096 — Mbappé\n"
+            "224604 — Bellingham\n"
+            "291721 — Saka\n"
+            "255996 — Haaland",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        espn_id = int(parts[1])
+    except ValueError:
+        await message.answer("❌ Invalid ID — must be a number.")
+        return
+
+    await message.answer(f"🔄 Fetching player <code>{espn_id}</code>...", parse_mode="HTML")
+
+    try:
+        import aiohttp
+        import config
+
+        headers = {
+            "x-rapidapi-host": config.API_FOOTBALL_HOST,
+            "x-rapidapi-key": config.API_FOOTBALL_KEY,
+        }
+        url = f"{config.API_FOOTBALL_BASE}/athlete/bio"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers,
+                                   params={"playerId": str(espn_id)},
+                                   timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                status = resp.status
+                text = await resp.text()
+
+        preview = text[:2500] + ("..." if len(text) > 2500 else "")
+        await message.answer(
+            f"📡 <b>Player {espn_id} — HTTP {status}</b>\n\n"
+            f"<pre>{preview}</pre>",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
