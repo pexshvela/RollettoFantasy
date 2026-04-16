@@ -170,7 +170,18 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    matches = await sheets.get_recent_matches(days=2)
+    all_matches = await sheets.get_recent_matches(days=2)
+
+    # Filter by active tournament keywords
+    keywords = await sheets.get_tournament_keywords()
+    if keywords:
+        matches = [
+            m for m in all_matches
+            if any(kw.lower() in (m.get("tournament") or "").lower()
+                   for kw in keywords)
+        ]
+    else:
+        matches = all_matches
 
     kb = InlineKeyboardBuilder()
 
@@ -184,23 +195,15 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    lines = ["🏟 <b>Recent UCL Results</b>\n<i>Tap a match for details</i>\n"]
+    tournament_label = matches[0].get("tournament") or "Recent Matches"
+    lines = [f"🏟 <b>{tournament_label}</b>\n<i>Tap a match for details</i>\n"]
     for m in matches:
         status_emoji = "✅" if m["status"] == "final" else "🔴" if m["status"] == "in_progress" else "⏳"
-        date_short = str(m.get("match_date", ""))[-5:]  # MM-DD
+        date_short = str(m.get("match_date", ""))[-5:]
         btn_label = (f"{status_emoji} {m['home_team']} "
                      f"{m['home_score']}-{m['away_score']} "
                      f"{m['away_team']} ({date_short})")
         kb.button(text=btn_label, callback_data=f"result:{m['match_id']}")
-
-    kb.button(text=t(lang, "back_home"), callback_data="home:back")
-    kb.adjust(1)
-
-    await callback.message.edit_text(
-        "\n".join(lines), parse_mode="HTML", reply_markup=kb.as_markup()
-    )
-    await state.set_state(Stats.results)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("result:"))
