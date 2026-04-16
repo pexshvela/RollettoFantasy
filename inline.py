@@ -34,6 +34,8 @@ def home_keyboard(lang: str, user_id: int, squad_submitted: bool,
         kb.button(text=t(lang, "my_squad_btn"),    callback_data="home:squad")
         kb.button(text=t(lang, "transfers_btn"),   callback_data="home:transfers")
     kb.button(text=t(lang, "leaderboard_btn"), callback_data="home:leaderboard")
+    kb.button(text="📊 " + t(lang, "stats_btn"),   callback_data="home:stats")
+    kb.button(text="🏟 " + t(lang, "results_btn"), callback_data="home:results")
     kb.button(text="📋 " + t(lang, "rules_btn"),   callback_data="home:rules")
     if user_id == config.ADMIN_ID:
         kb.button(text=t(lang, "admin_btn"), callback_data="home:admin")
