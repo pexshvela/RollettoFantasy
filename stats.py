@@ -124,18 +124,31 @@ async def show_player_stats(callback: CallbackQuery, state: FSMContext):
             pts = r.get("points", 0)
             lines.append(f"\n📅 <b>{match_label}</b>")
 
-            if bd.get("goals", 0):
-                lines.append(f"  ⚽ {bd['goals']} goal(s): +{bd.get('goals_pts', 0)} pts")
-            if bd.get("assists", 0):
-                lines.append(f"  🎯 {bd['assists']} assist(s): +{bd.get('assists_pts', 0)} pts")
-            if bd.get("yellow_cards", 0):
-                lines.append(f"  🟨 Yellow card: {bd.get('yellow_pts', 0)} pts")
-            if bd.get("red_cards", 0):
-                lines.append(f"  🟥 Red card: {bd.get('red_pts', 0)} pts")
-            if bd.get("clean_sheet"):
-                lines.append(f"  🧱 Clean sheet: +{bd.get('cs_pts', 0)} pts")
+            def _line(label, val, pts_val):
+                if val and val != 0:
+                    sign = "+" if pts_val >= 0 else ""
+                    lines.append(f"  {label}: {sign}{pts_val} pts")
+
+            mins = bd.get("minutes_played", 0)
+            app  = bd.get("pts_appearance", 0)
+            if app:
+                mins_label = f"60+ min" if mins >= 60 else f"{mins} min"
+                lines.append(f"  🕐 Played ({mins_label}): +{app} pts")
+            _line("⚽ Goals",            bd.get("goals"),          bd.get("pts_goals", 0))
+            _line("🎯 Assists",          bd.get("assists"),         bd.get("pts_assists", 0))
+            _line("🧱 Clean sheet",      bd.get("clean_sheet"),     bd.get("pts_clean_sheet", 0))
+            _line("🧤 Saves /3",         bd.get("saves"),           bd.get("pts_saves", 0))
+            _line("🛑 Penalty saved",    bd.get("penalty_saved"),   bd.get("pts_pen_saved", 0))
+            _line("📉 Goals conceded /2",bd.get("goals_conceded"),  bd.get("pts_conceded", 0))
+            _line("🎯 Penalty earned",   bd.get("penalty_earned"),  bd.get("pts_pen_earned", 0))
+            _line("❌ Penalty missed",   bd.get("penalty_miss"),    bd.get("pts_pen_miss", 0))
+            _line("⚠️ Pen conceded",     bd.get("penalty_conceded"),bd.get("pts_pen_conceded", 0))
+            _line("🟨 Yellow card",      bd.get("yellow_cards"),    bd.get("pts_yellow", 0))
+            _line("🟥 Red card",         bd.get("red_cards"),       bd.get("pts_red", 0))
+            _line("😬 Own goal",         bd.get("own_goals"),       bd.get("pts_own_goals", 0))
+            _line("🛡 Def. actions /3",  bd.get("def_actions"),     bd.get("pts_def_actions", 0))
             if bd.get("captain_multiplier", 1) > 1:
-                lines.append(f"  ⭐ Captain ×2")
+                lines.append(f"  ⭐ Captain ×2 (base: {bd.get('base_pts',0)} pts)")
             lines.append(f"  → <b>{pts} pts</b>")
 
     kb = InlineKeyboardBuilder()
