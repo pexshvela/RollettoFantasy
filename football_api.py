@@ -73,8 +73,18 @@ async def get_ucl_matches_by_date(date_str: str) -> list[dict]:
         t_url = str(tournament.get("tournament_url") or "").lower()
         t_name = str(tournament.get("name") or "").lower()
 
-        is_match = any(kw.lower() in t_url or kw.lower() in t_name
-                       for kw in active_keywords)
+        def _kw_match(text, kws):
+            t = text.lower()
+            for kw in kws:
+                kw_words = kw.lower().replace("-"," ").replace("_"," ")
+                if kw.lower() in t or kw_words in t:
+                    return True
+                kw_parts = kw_words.split()
+                if len(kw_parts) == 1 and len(kw_parts[0]) > 5 and kw_parts[0] in t:
+                    return True
+            return False
+
+        is_match = _kw_match(t_url, active_keywords) or _kw_match(t_name, active_keywords)
         if not is_match:
             continue
 
