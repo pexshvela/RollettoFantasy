@@ -1,231 +1,266 @@
 """
-scheduler.py — Background task that runs every 30 min on match days,
-detects finished UCL matches, calculates fantasy points, and updates
-all users in Supabase.
+scheduler.py — Background task for FlashScore-based point automation.
 
-Flow:
-  1. Call /scores to get UCL matches
-  2. Find matches with status == "final" not yet processed
-  3. For each final match, for each bot player on those teams:
-     - Call /athlete/eventlog?playerId={espn_id}
-     - Get stats for that match date
-  4. For each user, sum up points and update total_points
-  5. Optionally broadcast leaderboard update
+Flow every 30 min on match days:
+  1. Get recent UCL matches (from cache first, then API)
+  2. For each finished match not yet processed:
+     a. Fetch match details + player stats from API
+     b. Save to match_cache
+     c. For every user: calculate points → save to player_match_points → update total_points
+     d. Broadcast result to all users
+     e. Mark match as points_awarded = True
 """
 import asyncio
 import logging
-from datetime import datetime, timezone, date
+from datetime import date, timedelta
 
 import sheets
 import football_api
-from points_calculator import total_squad_points
-from players import ALL_PLAYERS
+from points_calculator import calc_player_points
+from players import ALL_PLAYERS, get_player_by_espn_name
 
 logger = logging.getLogger(__name__)
 
-# ── In-memory set of already-processed match IDs (resets on restart) ─────────
-_processed: set[str] = set()
+_processed_this_session: set[str] = set()
 
-# Match days — scheduler polls more frequently on these dates (UTC)
-# Update this list each matchday
-MATCH_DAYS: list[str] = [
-    "2026-04-15",  # QF second legs
-    "2026-04-14",
-    # Add SF and Final dates here:
-    # "2026-04-28", "2026-04-29",  # SF first legs
-    # "2026-05-05", "2026-05-06",  # SF second legs
-    # "2026-05-30",                # Final
+MATCH_DAYS = [
+    "2026-04-14", "2026-04-15",  # QF second legs (done)
+    "2026-04-29", "2026-04-30",  # SF first legs
+    "2026-05-06", "2026-05-07",  # SF second legs
+    "2026-05-30",                # Final
 ]
 
-# How often to check (seconds)
-POLL_INTERVAL_MATCHDAY   = 30 * 60   # 30 min on match days
-POLL_INTERVAL_NORMAL     = 4 * 60 * 60  # 4 hours otherwise
+POLL_MATCHDAY = 30 * 60   # 30 min
+POLL_NORMAL   = 4 * 60 * 60  # 4 hours
 
 
 async def run_scheduler(bot=None):
-    """Main scheduler loop — call this as a background asyncio task."""
     logger.info("Scheduler started.")
     while True:
         try:
             today = date.today().isoformat()
             is_match_day = today in MATCH_DAYS
-            await check_and_process_matches(bot)
-            interval = POLL_INTERVAL_MATCHDAY if is_match_day else POLL_INTERVAL_NORMAL
-            logger.info("Next check in %d minutes.", interval // 60)
+            await check_matches(bot)
+            interval = POLL_MATCHDAY if is_match_day else POLL_NORMAL
+            logger.info("Next check in %d min.", interval // 60)
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
-            logger.info("Scheduler cancelled.")
             break
         except Exception as e:
             logger.error("Scheduler error: %s", e)
-            await asyncio.sleep(60)  # wait 1 min and retry on error
+            await asyncio.sleep(60)
 
 
-async def check_and_process_matches(bot=None):
-    """Fetch scores, find newly finished matches, process them."""
-    logger.info("Checking UCL scores...")
-    matches = await football_api.get_scores()
+async def check_matches(bot=None):
+    logger.info("Checking UCL matches...")
 
-    for match in matches:
-        match_id = match["id"]
-        if match["status"] != "final":
+    # Get recent matches from API
+    matches = await football_api.get_ucl_matches(days_back=2)
+
+    if not matches:
+        # Fall back to what's in cache
+        cached = await sheets.get_recent_matches(days=2)
+        matches = [m for m in cached
+                   if m.get("status") == "final" and not m.get("points_awarded")]
+        if not matches:
+            logger.info("No new finished matches.")
+            return
+
+    for m in matches:
+        mid = m["id"]
+        if not mid or m.get("status") != "final":
             continue
-        if match_id in _processed:
+        if mid in _processed_this_session:
             continue
 
-        logger.info("Processing finished match: %s vs %s (%s)",
-                    match["homeTeam"], match["awayTeam"], match.get("date", ""))
+        # Check if already processed in DB
+        cached = await sheets.get_cached_match(mid)
+        if cached and cached.get("points_awarded"):
+            _processed_this_session.add(mid)
+            continue
 
-        try:
-            await process_match(match, bot)
-            _processed.add(match_id)
-        except Exception as e:
-            logger.error("Failed to process match %s: %s", match_id, e)
+        logger.info("Processing: %s vs %s", m["home_team"], m["away_team"])
+        await process_match(m, bot)
+        _processed_this_session.add(mid)
 
 
 async def process_match(match: dict, bot=None):
-    """
-    For a finished match:
-    1. Find which bot players played for the two teams
-    2. Fetch their stats via /athlete/eventlog
-    3. Update all users' total_points
-    """
-    home_team = match["homeTeam"]
-    away_team = match["awayTeam"]
-    match_date = str(match.get("date", ""))[:10]  # YYYY-MM-DD
+    mid = match["id"]
 
-    # Find bot players who played in this match
-    relevant_players = [
-        p for p in ALL_PLAYERS.values()
-        if _team_matches(p["team"], home_team) or _team_matches(p["team"], away_team)
-    ]
+    # Fetch player stats from API
+    player_stats_raw = await football_api.get_player_stats(mid)
 
-    if not relevant_players:
-        logger.warning("No bot players found for %s vs %s", home_team, away_team)
+    # Also try to enrich match with full details (events)
+    full_details = await football_api.get_match_details(mid)
+    if full_details:
+        match["events"] = full_details.get("events", [])
+
+    match["player_stats"] = player_stats_raw or {}
+
+    # Save to cache
+    await sheets.save_match_cache(match)
+
+    if not player_stats_raw:
+        logger.warning("No player stats for match %s — skipping point awards", mid)
         return
 
-    logger.info("Fetching stats for %d players...", len(relevant_players))
+    # Calculate and save points for every user
+    await award_points(match, player_stats_raw, bot)
 
-    # Fetch stats for each player (with small delay to respect rate limits)
+
+async def award_points(match: dict, player_stats_raw: dict, bot=None):
+    """
+    Match our bot players to the API's player name list,
+    calculate points, update every user's squad.
+    """
+    mid = match["id"]
+    home_team = match["home_team"]
+    away_team = match["away_team"]
+    home_score = match.get("home_score", 0)
+    away_score = match.get("away_score", 0)
+
+    # Map bot player IDs → stats
     player_stats: dict[str, dict] = {}
-    for p in relevant_players:
-        espn_id = p.get("espn_id")
-        if not espn_id:
-            logger.warning("No ESPN ID for %s — skipping", p["name"])
-            continue
-        stats = await football_api.get_player_match_stats(espn_id, match_date)
-        if stats:
-            player_stats[p["id"]] = stats
-            logger.info("%s: goals=%s ast=%s yc=%s rc=%s",
-                        p["name"], stats.get("goals"), stats.get("assists"),
-                        stats.get("yellow_cards"), stats.get("red_cards"))
-        else:
-            # Player didn't play or no data — 0 points
-            player_stats[p["id"]] = {"goals": 0, "assists": 0, "yellow_cards": 0,
-                                      "red_cards": 0, "penalty_miss": 0, "minutes_played": 0}
-        await asyncio.sleep(1.5)  # ~1.5s between calls → safe within rate limit
+    for name_lower, stats in player_stats_raw.items():
+        # Try matching by espn_name
+        bot_player = get_player_by_espn_name(stats.get("name", name_lower))
+        if not bot_player:
+            # Try partial last-name match
+            last = name_lower.split(".")[-1].strip()
+            bot_player = get_player_by_espn_name(last)
+        if bot_player:
+            # Add clean sheet info
+            if _team_matches(bot_player["team"], home_team):
+                stats["goals_conceded"] = away_score
+                stats["clean_sheet"] = away_score == 0
+            elif _team_matches(bot_player["team"], away_team):
+                stats["goals_conceded"] = home_score
+                stats["clean_sheet"] = home_score == 0
+            player_stats[bot_player["id"]] = stats
 
-    if not player_stats:
-        logger.warning("No stats collected for this match.")
-        return
+    logger.info("Matched %d/%d players with stats", len(player_stats), len(player_stats_raw))
 
-    # Determine clean sheets
-    home_clean = match["awayScore"] == 0
-    away_clean = match["homeScore"] == 0
-    for p in relevant_players:
-        pid = p["id"]
-        if pid not in player_stats:
-            continue
-        if _team_matches(p["team"], home_team):
-            player_stats[pid]["goals_conceded"] = match["awayScore"]
-            player_stats[pid]["clean_sheet"] = home_clean
-        else:
-            player_stats[pid]["goals_conceded"] = match["homeScore"]
-            player_stats[pid]["clean_sheet"] = away_clean
-
-    # Now update every user's total_points
-    await award_points_to_all_users(player_stats)
-
-    # Broadcast leaderboard if bot is provided
-    if bot:
-        await broadcast_match_result(bot, match, player_stats)
-
-
-async def award_points_to_all_users(player_stats: dict[str, dict]):
-    """Add match points to every registered user's total."""
+    # Get all users and update
     users = await sheets.get_all_users()
-    updated = 0
-    for user in users:
-        uid = int(user["telegram_id"])
+    updated_count = 0
+
+    for user_row in users:
+        uid = int(user_row["telegram_id"])
         squad = await sheets.get_squad(uid)
         if not squad:
             continue
 
-        pts = total_squad_points(squad, player_stats)
-        if pts == 0:
-            continue
+        captain_id = user_row.get("captain", "")
+        user_total_pts = 0
 
-        current = int(float(user.get("total_points") or 0))
-        await sheets.update_user(uid, total_points=current + pts)
-        updated += 1
-
-    logger.info("Awarded points to %d users.", updated)
-
-
-async def broadcast_match_result(bot, match: dict, player_stats: dict):
-    """Send match result + top scorers to all users."""
-    try:
-        users = await sheets.get_all_users()
-        result_text = (
-            f"⚽ <b>Match Result</b>\n\n"
-            f"🏟 <b>{match['homeTeam']}</b> {match['homeScore']} - "
-            f"{match['awayScore']} <b>{match['awayTeam']}</b>\n\n"
-            f"🏆 Leaderboard updated! Check your points from the home screen."
+        all_slots = (
+            ["gk1"]
+            + [f"def{i}" for i in range(1, 6)]
+            + [f"mf{i}" for i in range(1, 6)]
+            + [f"fw{i}" for i in range(1, 4)]
+            + [f"sub{i}" for i in range(1, 5)]
         )
-        sent = 0
-        for user in users:
-            try:
-                await bot.send_message(
-                    int(user["telegram_id"]),
-                    result_text,
-                    parse_mode="HTML"
-                )
-                sent += 1
-                await asyncio.sleep(0.05)  # avoid flood limits
-            except Exception:
-                pass
-        logger.info("Broadcast sent to %d users.", sent)
-    except Exception as e:
-        logger.error("Broadcast error: %s", e)
+
+        for slot in all_slots:
+            pid = squad.get(slot)
+            if not pid:
+                continue
+            stats = player_stats.get(pid)
+            if stats is None:
+                continue
+
+            raw_pts = calc_player_points(pid, stats)
+            is_captain = pid == captain_id
+            final_pts = raw_pts * 2 if is_captain else raw_pts
+
+            # Build breakdown for display
+            p_obj = get_player(pid)
+            position = p_obj.get("position", "FW") if p_obj else "FW"
+            goals_pts = stats.get("goals", 0) * (10 if position in ("GK", "DEF") else 5)
+            assists_pts = stats.get("assists", 0) * 3
+            yellow_pts = stats.get("yellow_cards", 0) * -1
+            red_pts = stats.get("red_cards", 0) * -3
+            pm_pts = stats.get("penalty_miss", 0) * -2
+            cs_pts = 4 if stats.get("clean_sheet") and position in ("GK", "DEF") and stats.get("minutes_played", 90) >= 60 else 0
+
+            breakdown = {
+                "goals":              stats.get("goals", 0),
+                "goals_pts":          goals_pts,
+                "assists":            stats.get("assists", 0),
+                "assists_pts":        assists_pts,
+                "yellow_cards":       stats.get("yellow_cards", 0),
+                "yellow_pts":         yellow_pts,
+                "red_cards":          stats.get("red_cards", 0),
+                "red_pts":            red_pts,
+                "penalty_miss":       stats.get("penalty_miss", 0),
+                "pm_pts":             pm_pts,
+                "clean_sheet":        bool(stats.get("clean_sheet")),
+                "cs_pts":             cs_pts,
+                "captain_multiplier": 2 if is_captain else 1,
+                "base_pts":           raw_pts,
+                "total":              final_pts,
+                "match":              f"{match['home_team']} {match['home_score']}-{match['away_score']} {match['away_team']}",
+            }
+
+            await sheets.save_player_match_points(uid, pid, mid, final_pts, breakdown)
+
+            # Only starters count toward total
+            if slot not in [f"sub{i}" for i in range(1, 5)]:
+                user_total_pts += final_pts
+
+        if user_total_pts != 0:
+            current = int(float(user_row.get("total_points") or 0))
+            await sheets.update_user(uid, total_points=current + user_total_pts)
+            updated_count += 1
+
+    logger.info("Points awarded to %d users for match %s.", updated_count, mid)
+    await sheets.mark_match_points_awarded(mid)
+
+    # Broadcast
+    if bot:
+        await broadcast_result(bot, match, users)
+
+
+async def broadcast_result(bot, match: dict, users: list):
+    text = (
+        f"⚽ <b>Match Result</b>\n\n"
+        f"🏟 <b>{match['home_team']}</b> "
+        f"{match['home_score']} - {match['away_score']} "
+        f"<b>{match['away_team']}</b>\n\n"
+        f"🏆 Points updated! Check your stats: tap <b>📊 Stats</b> in the menu."
+    )
+    sent = 0
+    for u in users:
+        try:
+            await bot.send_message(int(u["telegram_id"]), text, parse_mode="HTML")
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    logger.info("Broadcast sent to %d users.", sent)
 
 
 def _team_matches(bot_team: str, api_team: str) -> bool:
-    """Fuzzy match bot team name to API team name."""
     if not bot_team or not api_team:
         return False
-    b = bot_team.lower().strip()
-    a = api_team.lower().strip()
-
-    # Direct match
-    if b == a:
-        return True
-
-    # Common aliases
+    b, a = bot_team.lower(), api_team.lower()
     ALIASES = {
-        "man city":  ["manchester city"],
-        "psg":       ["paris saint-germain", "paris sg", "paris saint germain"],
-        "inter":     ["inter milan", "fc inter", "internazionale"],
-        "arsenal":   ["arsenal fc"],
-        "liverpool": ["liverpool fc"],
-        "barcelona": ["fc barcelona"],
+        "man city":    ["manchester city"],
+        "psg":         ["paris saint-germain", "paris saint germain", "paris sg"],
+        "inter":       ["inter milan", "internazionale", "fc inter"],
+        "arsenal":     ["arsenal fc"],
+        "liverpool":   ["liverpool fc"],
+        "barcelona":   ["fc barcelona"],
         "real madrid": ["real madrid cf"],
-        "bayern":    ["fc bayern münchen", "fc bayern munich", "bayern munich", "bayern münchen"],
+        "bayern":      ["fc bayern münchen", "fc bayern munich", "bayern munich", "bayern münchen"],
     }
-
-    for canonical, alternatives in ALIASES.items():
-        if b == canonical or b in alternatives:
-            if a == canonical or a in alternatives:
-                return True
-
-    # Partial: one contains the other
+    for canonical, alts in ALIASES.items():
+        all_names = [canonical] + alts
+        if b in all_names and a in all_names:
+            return True
     return b in a or a in b
+
+
+def get_player(pid: str):
+    from players import ALL_PLAYERS
+    return ALL_PLAYERS.get(pid)
