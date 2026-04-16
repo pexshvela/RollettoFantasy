@@ -1045,3 +1045,42 @@ async def cmd_rawmatch(message: Message, state: FSMContext):
             lines.append(f"<code>{k}</code>: <b>{v}</b>")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("testincidents"))
+async def cmd_testincidents(message: Message, state: FSMContext):
+    """Try all known incident endpoints for a match."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    mid = parts[1] if len(parts) >= 2 else "zXC8QVx3"
+    import aiohttp, config
+    headers = {
+        "x-rapidapi-host": "flashscore4.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type": "application/json",
+    }
+    endpoints = [
+        f"/api/flashscore/v2/matches/match/incidents?match_id={mid}",
+        f"/api/flashscore/v2/matches/incidents?match_id={mid}",
+        f"/api/flashscore/v2/matches/match/summary?match_id={mid}",
+        f"/api/flashscore/v2/matches/summary?match_id={mid}",
+        f"/api/flashscore/v2/matches/match/events?match_id={mid}",
+        f"/api/flashscore/v2/matches/events?match_id={mid}",
+        f"/api/flashscore/v2/matches/match/timeline?match_id={mid}",
+    ]
+    async with aiohttp.ClientSession() as s:
+        for ep in endpoints:
+            url = f"https://flashscore4.p.rapidapi.com{ep}"
+            async with s.get(url, headers=headers,
+                             timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                status = resp.status
+                if status == 200:
+                    text = await resp.text()
+                    preview = text[:600]
+                else:
+                    preview = f"HTTP {status}"
+            await message.answer(
+                f"<code>{ep.split('?')[0]}</code>\n{preview}",
+                parse_mode="HTML"
+            )
