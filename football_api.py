@@ -1,13 +1,12 @@
 """
 football_api.py — FlashScore API (flashscore4.p.rapidapi.com)
 
-Confirmed endpoints:
-  GET /api/flashscore/v2/matches/details?match_id=X
-  GET /api/flashscore/v2/matches/match/player-stats?match_id=X
-
-No listing endpoint available — admin adds match IDs manually via /addmatch.
-Match IDs come from flashscore.com URLs:
-  https://www.flashscore.com/match/AbCdEfGh/ → match_id = AbCdEfGh
+Confirmed endpoints used:
+  #2  GET /matches/list-by-date   → list all matches on a date, filter UCL by tournament_url
+  #3  GET /matches/details        → score, status, teams, team_ids
+  #4  GET /matches/match/summary  → goals, cards, assists (events)
+  #6  GET /matches/match/lineups  → who started (predictedLineups) and who was on bench
+  #7  GET /matches/match/player-stats → per-player stats (goals, assists, cards, saves etc.)
 """
 import logging
 import aiohttp
@@ -22,8 +21,10 @@ HEADERS = {
     "Content-Type":    "application/json",
 }
 
+UCL_URL_KEYWORDS = ["champions-league", "champions_league", "ucl"]
 
-async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | None]:
+
+async def _get(endpoint: str, params: dict = None) -> tuple[int, any]:
     url = f"{BASE}/{endpoint.lstrip('/')}"
     try:
         async with aiohttp.ClientSession() as s:
@@ -37,65 +38,211 @@ async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | None]:
         return 0, None
 
 
-# ── Match details ─────────────────────────────────────────────────────────────
+# ── 1. List UCL matches by date ───────────────────────────────────────────────
+
+async def get_ucl_matches_by_date(date_str: str) -> list[dict]:
+    """
+    Use /list-by-date to get all football matches on a date,
+    then filter to UCL only by tournament_url containing 'champions-league'.
+    date_str: 'YYYY-MM-DD'
+    Returns list of normalized match dicts.
+    """
+    code, data = await _get(
+        "/api/flashscore/v2/matches/list-by-date",
+        {"sport_id": "1", "date": date_str, "timezone": "Europe/Berlin"}
+    )
+    if code != 200 or not data:
+        logger.error("list-by-date HTTP %s for %s", code, date_str)
+        return []
+
+    tournaments = data if isinstance(data, list) else data.get("tournaments", [])
+    ucl_matches = []
+
+    for tournament in tournaments:
+        t_url = str(tournament.get("tournament_url") or "").lower()
+        t_name = str(tournament.get("name") or "").lower()
+
+        is_ucl = (
+            any(kw in t_url for kw in UCL_URL_KEYWORDS) or
+            "champions" in t_name
+        )
+        if not is_ucl:
+            continue
+
+        for m in (tournament.get("matches") or []):
+            mid = m.get("match_id", "")
+            if not mid:
+                continue
+
+            ms = m.get("match_status") or {}
+            if ms.get("is_finished"):
+                status = "final"
+            elif ms.get("is_in_progress") or ms.get("is_started"):
+                status = "in_progress"
+            else:
+                status = "scheduled"
+
+            scores = m.get("scores") or {}
+            home_team = m.get("home_team") or {}
+            away_team = m.get("away_team") or {}
+
+            import datetime
+            ts = m.get("timestamp")
+            date_out = datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc).strftime("%Y-%m-%d") if ts else date_str
+
+            ucl_matches.append({
+                "id":            mid,
+                "home_team":     home_team.get("name", "?"),
+                "away_team":     away_team.get("name", "?"),
+                "home_score":    int(float(scores.get("home") or 0)),
+                "away_score":    int(float(scores.get("away") or 0)),
+                "home_team_id":  home_team.get("team_id", ""),
+                "away_team_id":  away_team.get("team_id", ""),
+                "status":        status,
+                "date":          date_out,
+                "tournament":    tournament.get("name", ""),
+            })
+
+    logger.info("Found %d UCL match(es) on %s", len(ucl_matches), date_str)
+    return ucl_matches
+
+
+# ── 2. Match details (score + status) ────────────────────────────────────────
 
 async def get_match_details(match_id: str) -> dict | None:
     code, raw = await _get("/api/flashscore/v2/matches/details", {"match_id": match_id})
     if code != 200 or not raw:
         logger.error("get_match_details HTTP %s for %s", code, match_id)
         return None
-    return _parse_match_details(match_id, raw)
+    return _parse_details(match_id, raw)
 
 
-def _parse_match_details(match_id: str, raw: dict) -> dict:
-    # Teams — FlashScore structure confirmed: raw.home_team.name
+def _parse_details(match_id: str, raw: dict) -> dict:
     home = raw.get("home_team") or {}
     away = raw.get("away_team") or {}
-    home_team = home.get("name") or home.get("short_name") or "?"
-    away_team = away.get("name") or away.get("short_name") or "?"
 
-    # Score — confirmed: raw["scores"]["home"] and raw["scores"]["away"]
+    # Score confirmed: raw["scores"]["home"] / ["away"]
     scores = raw.get("scores") or {}
-    home_score = int(float(scores.get("home") or scores.get("home_total") or 0))
-    away_score = int(float(scores.get("away") or scores.get("away_total") or 0))
+    home_score = int(float(scores.get("home") or 0))
+    away_score = int(float(scores.get("away") or 0))
 
-    # Status — confirmed: raw.match_status.is_finished
     ms = raw.get("match_status") or {}
     if ms.get("is_finished"):
         status = "final"
-    elif ms.get("is_in_progress"):
-        status = "in_progress"
-    elif ms.get("is_started"):
+    elif ms.get("is_in_progress") or ms.get("is_started"):
         status = "in_progress"
     else:
         status = "scheduled"
 
-    # Date from Unix timestamp
+    import datetime
     ts = raw.get("timestamp")
-    if ts:
-        from datetime import datetime, timezone
-        date_str = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
-    else:
-        date_str = ""
+    date_str = (datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+                if ts else "")
 
     return {
         "id":            match_id,
-        "home_team":     home_team,
-        "away_team":     away_team,
+        "home_team":     home.get("name") or home.get("short_name") or "?",
+        "away_team":     away.get("name") or away.get("short_name") or "?",
         "home_score":    home_score,
         "away_score":    away_score,
-        "status":        status,
-        "date":          date_str,
-        "events":        [],   # filled by get_match_incidents if available
         "home_team_id":  home.get("team_id", ""),
         "away_team_id":  away.get("team_id", ""),
+        "status":        status,
+        "date":          date_str,
         "tournament":    (raw.get("tournament") or {}).get("name", ""),
     }
 
 
-# ── Player stats ──────────────────────────────────────────────────────────────
+# ── 3. Lineups — who actually played ─────────────────────────────────────────
+
+async def get_lineups(match_id: str) -> dict:
+    """
+    Returns:
+    {
+      "home_starters":  [{"name": "Neuer M.", "player_id": "...", "team_id": "..."}],
+      "away_starters":  [...],
+      "home_subs":      [...],
+      "away_subs":      [...],
+      "home_team_id":   "...",
+      "away_team_id":   "...",
+      "starter_ids":    set of player_ids who started,
+      "played_ids":     set of player_ids who played (starters + used subs),
+    }
+    """
+    code, raw = await _get("/api/flashscore/v2/matches/match/lineups", {"match_id": match_id})
+    if code != 200 or not raw:
+        logger.warning("get_lineups HTTP %s for %s", code, match_id)
+        return {}
+
+    result = {
+        "home_starters": [], "away_starters": [],
+        "home_subs": [],     "away_subs": [],
+        "home_team_id": "",  "away_team_id": "",
+        "starter_ids": set(), "played_ids": set(),
+    }
+
+    items = raw if isinstance(raw, list) else [raw]
+
+    for side_data in items:
+        side = str(side_data.get("side") or "").lower()  # "home" or "away"
+        team_id = str(side_data.get("team_id") or "")
+
+        if side == "home":
+            result["home_team_id"] = team_id
+        elif side == "away":
+            result["away_team_id"] = team_id
+
+        # Starters: predictedLineups (confirmed field from your test)
+        starters = side_data.get("predictedLineups") or side_data.get("lineups") or []
+        for p in starters:
+            entry = {
+                "name":       p.get("name") or p.get("fieldName") or "",
+                "field_name": p.get("fieldName") or "",
+                "player_id":  p.get("player_id") or "",
+                "number":     p.get("number") or "",
+                "team_id":    team_id,
+                "side":       side,
+            }
+            if side == "home":
+                result["home_starters"].append(entry)
+            else:
+                result["away_starters"].append(entry)
+            if entry["player_id"]:
+                result["starter_ids"].add(entry["player_id"])
+                result["played_ids"].add(entry["player_id"])
+
+        # Substitutes
+        subs = side_data.get("substitutes") or side_data.get("bench") or []
+        for p in subs:
+            entry = {
+                "name":       p.get("name") or p.get("fieldName") or "",
+                "field_name": p.get("fieldName") or "",
+                "player_id":  p.get("player_id") or "",
+                "number":     p.get("number") or "",
+                "team_id":    team_id,
+                "side":       side,
+                "came_on":    p.get("came_on") or p.get("substitute_time") or "",
+            }
+            if side == "home":
+                result["home_subs"].append(entry)
+            else:
+                result["away_subs"].append(entry)
+            # Only add to played_ids if they actually came on
+            if entry["player_id"] and entry.get("came_on"):
+                result["played_ids"].add(entry["player_id"])
+
+    logger.info("Lineups: %d home starters, %d away starters",
+                len(result["home_starters"]), len(result["away_starters"]))
+    return result
+
+
+# ── 4. Player stats ───────────────────────────────────────────────────────────
 
 async def get_player_stats(match_id: str) -> dict | None:
+    """
+    Returns {flashscore_player_id: stats_dict} keyed by FlashScore player_id.
+    Also keyed by lowercase name for fallback matching.
+    """
     code, raw = await _get("/api/flashscore/v2/matches/match/player-stats",
                            {"match_id": match_id})
     if code != 200 or not raw:
@@ -105,36 +252,15 @@ async def get_player_stats(match_id: str) -> dict | None:
 
 
 def _parse_player_stats(raw: dict) -> dict:
-    """
-    Confirmed structure:
-    {"players": [{
-        "name": "Nyland Orjan",
-        "team_id": "h8oAv4Ts",
-        "position": "Goalkeeper",
-        "is_goalkeeper": true,
-        "in_base_lineup": true,
-        "stats": {
-            "CARDS_YELLOW":           {"raw_value": "0"},
-            "CARDS_RED":              {"raw_value": "0"},
-            "ASSISTS_GOAL":           {"raw_value": "0"},
-            "PENALTIES_NOT_CONVERTED":{"raw_value": "0"},
-            "GOALS_PENALTY":          {"raw_value": "0"},
-            ...
-        }
-    }]}
-    """
     players_raw = raw.get("players") or []
     result = {}
 
     for p in players_raw:
-        name = (p.get("name") or "").strip()
-        if not name:
-            continue
-
-        stats_raw = p.get("stats") or {}
+        name       = (p.get("name") or "").strip()
+        player_id  = p.get("player_id") or ""
+        stats_raw  = p.get("stats") or {}
 
         def sv(key: str) -> int:
-            """Get integer value from ALL_CAPS FlashScore stat key."""
             entry = stats_raw.get(key)
             if isinstance(entry, dict):
                 v = entry.get("raw_value") or entry.get("value") or 0
@@ -145,24 +271,29 @@ def _parse_player_stats(raw: dict) -> dict:
             except Exception:
                 return 0
 
-        # Goals: regular + penalty goals, exclude own goals
-        goals_open   = sv("GOALS_OPEN_PLAY") or sv("GOALS_SCORED") or sv("GOALS")
-        goals_penalty= sv("GOALS_PENALTY")
-        own_goals    = sv("GOALS_OWN") or sv("OWN_GOALS")
-        goals = max(0, goals_open + goals_penalty - own_goals)
+        # Goals
+        goals_open    = sv("GOALS_OPEN_PLAY")
+        goals_penalty = sv("GOALS_PENALTY")
+        own_goals     = sv("GOALS_OWN") or sv("OWN_GOALS")
+        goals         = max(0, goals_open + goals_penalty - own_goals)
 
-        # Minutes — use MINUTES_PLAYED or assume 90 if in starting lineup
+        # Minutes — use explicit field or assume 90 if in base lineup
         minutes = sv("MINUTES_PLAYED") or sv("MINUTES")
         if not minutes and p.get("in_base_lineup"):
             minutes = 90
 
-        # Defensive actions for the +1 per 3 rule
-        tackles       = sv("TACKLES") or sv("TACKLE_TOTAL") or sv("TACKLES_WON")
-        interceptions = sv("INTERCEPTIONS") or sv("INTERCEPTION")
-        blocks        = sv("BLOCKED_SHOTS") or sv("CLEARANCES") or sv("BLOCKS")
+        # Saves
+        saves = (sv("SAVES") or sv("GOALKEEPER_SAVES") or
+                 sv("SHOTS_SAVED_TOTAL") or sv("SHOTS_SAVED"))
 
-        result[name.lower()] = {
+        # Defensive actions
+        tackles        = sv("TACKLES") or sv("TACKLE_TOTAL") or sv("TACKLES_WON")
+        interceptions  = sv("INTERCEPTIONS")
+        blocks         = sv("BLOCKED_SHOTS") or sv("CLEARANCES") or sv("BLOCKS")
+
+        stats = {
             "name":             name,
+            "player_id":        player_id,
             "team_id":          p.get("team_id", ""),
             "position":         p.get("position", ""),
             "is_goalkeeper":    bool(p.get("is_goalkeeper")),
@@ -177,25 +308,30 @@ def _parse_player_stats(raw: dict) -> dict:
             "penalty_earned":   sv("PENALTIES_WON"),
             "penalty_conceded": sv("PENALTIES_COMMITTED") or sv("PENALTIES_CONCEDED"),
             "penalty_saved":    sv("PENALTIES_SAVED"),
-            "saves":            sv("SAVES") or sv("GOALKEEPER_SAVES") or sv("SHOTS_SAVED_TOTAL"),
+            "saves":            saves,
             "tackles":          tackles,
             "interceptions":    interceptions,
             "blocks":           blocks,
             "minutes_played":   minutes,
-            "goals_conceded":   0,     # filled by scheduler
-            "clean_sheet":      False, # filled by scheduler
-            "raw_stats":        {k: sv(k) for k in stats_raw},
+            "goals_conceded":   0,      # set by scheduler
+            "clean_sheet":      False,  # set by scheduler
         }
+
+        # Store by both player_id and lowercase name for matching
+        if player_id:
+            result[player_id] = stats
+        if name:
+            result[name.lower()] = stats
 
     return result
 
 
-# ── Match incidents (goals/cards timeline) ────────────────────────────────────
+# ── 5. Match events (goals/cards) ─────────────────────────────────────────────
 
 async def get_match_incidents(match_id: str) -> list[dict]:
     """
-    Confirmed endpoint: /api/flashscore/v2/matches/match/summary
-    Returns list of events: [{minutes, team, description, players:[{name, type}]}]
+    Confirmed endpoint: /matches/match/summary
+    Returns list of goal/card events.
     """
     code, raw = await _get("/api/flashscore/v2/matches/match/summary",
                            {"match_id": match_id})
@@ -205,45 +341,38 @@ async def get_match_incidents(match_id: str) -> list[dict]:
 
 
 def _parse_summary(raw) -> list[dict]:
-    """
-    Confirmed structure (list of events):
-    [{"minutes": "1", "team": "away", "description": "GOAL!...",
-      "players": [{"name": "Guler A.", "type": "Goal"}]}]
-    """
-    if isinstance(raw, dict):
-        items = raw.get("incidents") or raw.get("events") or raw.get("summary") or []
-    else:
-        items = raw if isinstance(raw, list) else []
-
+    items = raw if isinstance(raw, list) else (
+        raw.get("incidents") or raw.get("events") or []
+    )
     events = []
     for inc in items:
-        desc = str(inc.get("description") or "").lower()
+        desc    = str(inc.get("description") or "").lower()
         players = inc.get("players") or []
-        minute = str(inc.get("minutes") or inc.get("minute") or "")
-        team = str(inc.get("team") or "").lower()  # "home" or "away"
+        minute  = str(inc.get("minutes") or inc.get("minute") or "")
+        team    = str(inc.get("team") or "").lower()
 
-        # Determine event type from players list or description
         for player_entry in players:
             ptype = str(player_entry.get("type") or "").lower()
             pname = player_entry.get("name") or ""
 
             if ptype == "goal" or "goal" in ptype:
                 etype = "goal"
-            elif "yellow" in ptype or "yellow" in desc:
+            elif "own" in ptype:
+                etype = "own_goal"
+            elif "yellow" in ptype:
                 etype = "yellow_card"
-            elif "red" in ptype or ("red" in desc and "yellow" not in desc):
+            elif "red" in ptype:
                 etype = "red_card"
             elif "penalty" in ptype and "miss" in ptype:
                 etype = "penalty_miss"
             else:
                 continue
 
-            # Assist: second player in list if type is Assist
-            assist = ""
-            for other in players:
-                if str(other.get("type") or "").lower() in ("assist", "goal assist"):
-                    assist = other.get("name") or ""
-                    break
+            assist = next(
+                (o.get("name") or "" for o in players
+                 if str(o.get("type") or "").lower() in ("assist", "goal assist")),
+                ""
+            )
 
             events.append({
                 "type":   etype,
@@ -252,9 +381,8 @@ def _parse_summary(raw) -> list[dict]:
                 "assist": assist,
                 "team":   team,
             })
-            break  # one event per incident entry
+            break
 
-        # If no players list but description mentions goal/card
         if not players:
             if "goal" in desc:
                 events.append({"type": "goal", "minute": minute,
@@ -265,25 +393,40 @@ def _parse_summary(raw) -> list[dict]:
             elif "red card" in desc:
                 events.append({"type": "red_card", "minute": minute,
                                 "player": "", "assist": "", "team": team})
-
     return events
 
 
-# ── Full match fetch (details + stats + incidents) ────────────────────────────
+# ── 6. Full match fetch ────────────────────────────────────────────────────────
 
 async def fetch_full_match(match_id: str) -> dict | None:
     """
-    Fetch everything about a match in one call.
-    Returns enriched match dict ready for save_match_cache.
+    Fetch details + lineups + player_stats + events.
+    Returns enriched match dict ready for processing.
     """
     details = await get_match_details(match_id)
     if not details:
         return None
 
-    stats   = await get_player_stats(match_id)
-    events  = await get_match_incidents(match_id)
+    lineups      = await get_lineups(match_id)
+    player_stats = await get_player_stats(match_id)
+    events       = await get_match_incidents(match_id)
 
-    details["player_stats"] = stats or {}
-    details["events"]       = events
+    details["lineups"]       = lineups
+    details["player_stats"]  = player_stats or {}
+    details["events"]        = events
+    details["played_ids"]    = lineups.get("played_ids", set())
+    details["starter_ids"]   = lineups.get("starter_ids", set())
 
     return details
+
+
+# ── 7. Auto-discovery for scheduler ───────────────────────────────────────────
+
+async def get_ucl_matches_today_and_yesterday() -> list[dict]:
+    """Used by scheduler to auto-detect UCL matches without manual input."""
+    from datetime import date, timedelta
+    matches = []
+    for d in [date.today(), date.today() - timedelta(days=1)]:
+        found = await get_ucl_matches_by_date(d.isoformat())
+        matches.extend(found)
+    return matches
