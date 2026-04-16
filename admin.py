@@ -977,6 +977,19 @@ Supports text, photos, videos — no forwarded header.</i>
 <i>Send a message to all users or a list of IDs.</i>
 
 ━━━━━━━━━━━━━━━━━━━━
+⚙️ <b>TOURNAMENT FILTER</b>
+━━━━━━━━━━━━━━━━━━━━
+
+/settournaments ucl
+<i>Set tournament filter. Bot only broadcasts/scans these.
+Shortcuts: ucl, pl, wc, el, ecl, laliga, seriea, bundesliga, ligue1
+Multiple: /settournaments ucl pl el
+Custom: /settournaments custom my-keyword</i>
+
+/tournaments
+<i>Show current active tournament filter.</i>
+
+━━━━━━━━━━━━━━━━━━━━
 🔬 <b>API TESTING</b>
 ━━━━━━━━━━━━━━━━━━━━
 
@@ -1126,3 +1139,117 @@ async def cmd_testlineup(message: Message, state: FSMContext):
             f"📅 <b>List-by-date ({today}) HTTP {status2}</b>\n<pre>{text2[:2000]}</pre>",
             parse_mode="HTML"
         )
+
+
+# ── Tournament filter ─────────────────────────────────────────────────────────
+
+KNOWN_TOURNAMENTS = {
+    "ucl":  ("Champions League", ["champions-league"]),
+    "pl":   ("Premier League",   ["premier-league", "england/premier-league"]),
+    "wc":   ("World Cup",        ["world-cup", "fifa-world-cup"]),
+    "el":   ("Europa League",    ["europa-league"]),
+    "ecl":  ("Conference League",["conference-league"]),
+    "laliga": ("La Liga",        ["laliga", "spain/laliga"]),
+    "seriea": ("Serie A",        ["serie-a", "italy/serie-a"]),
+    "bundesliga": ("Bundesliga", ["bundesliga", "germany/bundesliga"]),
+    "ligue1": ("Ligue 1",        ["ligue-1", "france/ligue-1"]),
+}
+
+
+@router.message(Command("settournaments"))
+async def cmd_settournaments(message: Message, state: FSMContext):
+    """
+    Set which tournaments to auto-scan and broadcast results for.
+
+    Usage:
+      /settournaments ucl              → Champions League only
+      /settournaments ucl pl           → UCL + Premier League
+      /settournaments ucl el ecl       → UCL + Europa + Conference
+      /settournaments custom champions-league premier-league  → custom keywords
+
+    Shortcuts: ucl, pl, wc, el, ecl, laliga, seriea, bundesliga, ligue1
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.strip().split()[1:]
+    if not parts:
+        # Show current setting + available options
+        current = await sheets.get_tournament_keywords()
+        lines = [
+            "🏆 <b>Tournament Filter</b>\n",
+            f"Current keywords: {', '.join(f'<code>{k}</code>' for k in current)}\n",
+            "<b>Available shortcuts:</b>",
+        ]
+        for code, (name, keywords) in KNOWN_TOURNAMENTS.items():
+            lines.append(f"  <code>{code}</code> → {name}")
+        lines.append(
+            "\n<b>Usage:</b>\n"
+            "<code>/settournaments ucl</code>\n"
+            "<code>/settournaments ucl pl</code>\n"
+            "<code>/settournaments ucl el ecl</code>\n"
+            "<code>/settournaments custom my-keyword</code>"
+        )
+        await message.answer("\n".join(lines), parse_mode="HTML")
+        return
+
+    # Custom keywords mode
+    if parts[0] == "custom":
+        keywords = parts[1:]
+        if not keywords:
+            await message.answer("❌ Provide at least one keyword after 'custom'.")
+            return
+        await sheets.set_setting("tournament_keywords", keywords)
+        await message.answer(
+            f"✅ Custom tournament filter set:\n"
+            + "\n".join(f"  • <code>{k}</code>" for k in keywords),
+            parse_mode="HTML"
+        )
+        return
+
+    # Shortcut mode
+    keywords = []
+    names = []
+    unknown = []
+    for code in parts:
+        code_lower = code.lower()
+        if code_lower in KNOWN_TOURNAMENTS:
+            name, kws = KNOWN_TOURNAMENTS[code_lower]
+            keywords.extend(kws)
+            names.append(name)
+        else:
+            unknown.append(code)
+
+    if unknown:
+        await message.answer(
+            f"❌ Unknown shortcuts: {', '.join(unknown)}\n\n"
+            f"Use /settournaments to see available options.",
+            parse_mode="HTML"
+        )
+        return
+
+    if not keywords:
+        await message.answer("❌ No valid tournaments selected.")
+        return
+
+    await sheets.set_setting("tournament_keywords", keywords)
+    await message.answer(
+        f"✅ <b>Tournament filter updated:</b>\n\n"
+        + "\n".join(f"  🏆 {n}" for n in names) +
+        f"\n\nBot will now auto-scan and broadcast results for these tournaments only.",
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("tournaments"))
+async def cmd_tournaments(message: Message, state: FSMContext):
+    """Show current tournament filter."""
+    if not is_admin(message.from_user.id):
+        return
+    current = await sheets.get_tournament_keywords()
+    await message.answer(
+        f"🏆 <b>Active tournament filter:</b>\n\n"
+        + "\n".join(f"  • <code>{k}</code>" for k in current) +
+        f"\n\nChange with: /settournaments ucl pl el",
+        parse_mode="HTML"
+    )
