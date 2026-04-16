@@ -168,11 +168,24 @@ async def get_squad(telegram_id: int) -> dict | None:
 
 async def save_squad(telegram_id: int, squad: dict):
     try:
-        data = {"telegram_id": telegram_id, **squad}
+        # Explicitly send None for empty slots so Supabase CLEARS the column.
+        # Without this, upsert ignores missing keys and keeps old values.
+        all_slots = [
+            "formation", "gk1",
+            "def1", "def2", "def3", "def4", "def5",
+            "mf1",  "mf2",  "mf3",  "mf4",  "mf5",
+            "fw1",  "fw2",  "fw3",
+            "sub1", "sub2", "sub3", "sub4",
+        ]
+        data = {"telegram_id": telegram_id}
+        for key in all_slots:
+            val = squad.get(key, None)
+            data[key] = None if val == "" else val
         _get_sb().table("squads").upsert(data).execute()
-        cached = _squad_cache.get(telegram_id) or {}
-        cached.update(squad)
-        _squad_cache[telegram_id] = cached
+        # Replace cache entirely — never use .update() which keeps removed keys
+        _squad_cache[telegram_id] = {
+            k: v for k, v in squad.items() if v not in ("", None)
+        }
     except Exception as e:
         logger.error("save_squad error: %s", e)
 
@@ -300,3 +313,129 @@ async def reset_campaign():
     # Clear all in-memory caches
     _user_cache.clear()
     _squad_cache.clear()
+
+
+# ── Match cache ───────────────────────────────────────────────────────────────
+
+async def get_cached_match(match_id: str) -> dict | None:
+    try:
+        res = _get_sb().table("match_cache").select("*").eq("match_id", match_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error("get_cached_match error: %s", e)
+        return None
+
+
+async def save_match_cache(match: dict):
+    """
+    match dict: id, home_team, away_team, home_score, away_score,
+                status, date, events (list), player_stats (dict)
+    """
+    import json
+    try:
+        _get_sb().table("match_cache").upsert({
+            "match_id":       match["id"],
+            "home_team":      match.get("home_team", ""),
+            "away_team":      match.get("away_team", ""),
+            "home_score":     match.get("home_score", 0),
+            "away_score":     match.get("away_score", 0),
+            "status":         match.get("status", "scheduled"),
+            "match_date":     match.get("date", ""),
+            "events":         json.dumps(match.get("events", [])),
+            "player_stats":   json.dumps(match.get("player_stats", {})),
+            "points_awarded": match.get("points_awarded", False),
+        }).execute()
+    except Exception as e:
+        logger.error("save_match_cache error: %s", e)
+
+
+async def mark_match_points_awarded(match_id: str):
+    try:
+        _get_sb().table("match_cache").update(
+            {"points_awarded": True}
+        ).eq("match_id", match_id).execute()
+    except Exception as e:
+        logger.error("mark_match_points_awarded error: %s", e)
+
+
+async def get_recent_matches(days: int = 2) -> list[dict]:
+    """Get all cached matches from the last N days, newest first."""
+    from datetime import date, timedelta
+    import json
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    try:
+        res = _get_sb().table("match_cache").select("*").gte(
+            "match_date", cutoff
+        ).order("match_date", desc=True).execute()
+        rows = res.data or []
+        # Parse JSON fields
+        for r in rows:
+            if isinstance(r.get("events"), str):
+                try:
+                    r["events"] = json.loads(r["events"])
+                except Exception:
+                    r["events"] = []
+            if isinstance(r.get("player_stats"), str):
+                try:
+                    r["player_stats"] = json.loads(r["player_stats"])
+                except Exception:
+                    r["player_stats"] = {}
+        return rows
+    except Exception as e:
+        logger.error("get_recent_matches error: %s", e)
+        return []
+
+
+# ── Player match points ───────────────────────────────────────────────────────
+
+async def save_player_match_points(telegram_id: int, player_id: str,
+                                   match_id: str, points: int, breakdown: dict):
+    import json
+    try:
+        _get_sb().table("player_match_points").upsert({
+            "telegram_id": telegram_id,
+            "player_id":   player_id,
+            "match_id":    match_id,
+            "points":      points,
+            "breakdown":   json.dumps(breakdown),
+        }).execute()
+    except Exception as e:
+        logger.error("save_player_match_points error: %s", e)
+
+
+async def get_player_points_history(telegram_id: int, player_id: str) -> list[dict]:
+    """All point entries for a player in a user's squad, newest first."""
+    import json
+    try:
+        res = _get_sb().table("player_match_points").select(
+            "*, match_cache(home_team, away_team, home_score, away_score, match_date)"
+        ).eq("telegram_id", telegram_id).eq("player_id", player_id).order(
+            "created_at", desc=True
+        ).execute()
+        rows = res.data or []
+        for r in rows:
+            if isinstance(r.get("breakdown"), str):
+                try:
+                    r["breakdown"] = json.loads(r["breakdown"])
+                except Exception:
+                    r["breakdown"] = {}
+        return rows
+    except Exception as e:
+        logger.error("get_player_points_history error: %s", e)
+        return []
+
+
+async def get_squad_points_summary(telegram_id: int) -> dict[str, int]:
+    """Total points per player_id for this user."""
+    try:
+        res = _get_sb().table("player_match_points").select(
+            "player_id, points"
+        ).eq("telegram_id", telegram_id).execute()
+        summary: dict[str, int] = {}
+        for r in (res.data or []):
+            pid = r["player_id"]
+            summary[pid] = summary.get(pid, 0) + (r["points"] or 0)
+        return summary
+    except Exception as e:
+        logger.error("get_squad_points_summary error: %s", e)
+        return {}
