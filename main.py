@@ -11,6 +11,7 @@ import registration
 import squad
 import transfers
 import admin
+import stats as stats_handler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +31,7 @@ async def main():
     dp.include_router(squad.router)
     dp.include_router(transfers.router)
     dp.include_router(admin.router)
+    dp.include_router(stats_handler.router)
 
     logger.info("Initializing Supabase DB...")
     try:
