@@ -52,3 +52,10 @@ SUPPORTED_LANGUAGES = ["en", "it", "fr", "es"]
 API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")   # your RapidAPI key
 API_FOOTBALL_HOST = os.getenv("API_FOOTBALL_HOST", "flashscore4.p.rapidapi.com")
 API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://flashscore4.p.rapidapi.com")
+
+# ── Tournament filter ─────────────────────────────────────────────────────────
+# Keywords matched against tournament_url from FlashScore list-by-date.
+# Matches whose tournament_url contains ANY of these keywords are processed/shown.
+# Admin can change this at runtime with /settournaments command.
+# Default: Champions League only.
+DEFAULT_TOURNAMENT_KEYWORDS = ["champions-league"]
