@@ -497,3 +497,86 @@ async def cmd_testplayer(message: Message, state: FSMContext):
 
     except Exception as e:
         await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("scores"))
+async def cmd_scores(message: Message, state: FSMContext):
+    """Admin only — fetch UCL scores for a specific date or yesterday.
+    Usage: /scores           → yesterday
+           /scores 2026-04-15 → specific date
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    from datetime import date, timedelta
+    parts = message.text.strip().split()
+
+    if len(parts) >= 2:
+        date_str = parts[1]
+    else:
+        date_str = (date.today() - timedelta(days=1)).isoformat()
+
+    await message.answer(f"🔄 Fetching UCL scores for <code>{date_str}</code>...", parse_mode="HTML")
+
+    try:
+        import aiohttp
+        import config
+
+        headers = {
+            "x-rapidapi-host": config.API_FOOTBALL_HOST,
+            "x-rapidapi-key": config.API_FOOTBALL_KEY,
+        }
+
+        # Try with date param first
+        results = []
+        async with aiohttp.ClientSession() as session:
+            for endpoint, params in [
+                ("/scores", {"date": date_str}),
+                ("/scores", {"dates": date_str}),
+                ("/matches", {"date": date_str}),
+            ]:
+                url = f"{config.API_FOOTBALL_BASE}{endpoint}"
+                async with session.get(url, headers=headers, params=params,
+                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        raw = (data.get("events") or data.get("matches") or
+                               (data if isinstance(data, list) else []))
+                        if raw:
+                            results = raw
+                            break
+                        # Also try raw response for debugging
+                        raw_text = str(data)[:800]
+                    else:
+                        raw_text = f"HTTP {resp.status}"
+
+        if not results:
+            await message.answer(
+                f"⚠️ No matches found for <code>{date_str}</code>\n\n"
+                f"Last raw response preview:\n<pre>{raw_text}</pre>",
+                parse_mode="HTML"
+            )
+            return
+
+        lines = [f"📅 <b>UCL Results — {date_str}</b>\n"]
+        for m in results:
+            try:
+                # Parse teams and score
+                competitors = []
+                if "competitions" in m:
+                    competitors = m["competitions"][0].get("competitors", [])
+                home = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                away = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                home_name = home.get("team", {}).get("displayName", m.get("name", "?"))
+                away_name = away.get("team", {}).get("displayName", "?")
+                home_score = home.get("score", "?")
+                away_score = away.get("score", "?")
+                status = m.get("status", {}).get("type", {}).get("description", "?")
+                lines.append(f"⚽ <b>{home_name}</b> {home_score} - {away_score} <b>{away_name}</b> <i>({status})</i>")
+            except Exception:
+                lines.append(f"• {m.get('name', str(m)[:80])}")
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
