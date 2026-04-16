@@ -101,18 +101,56 @@ def get_player_by_espn_id(espn_id: int) -> dict | None:
     return ESPN_ID_MAP.get(espn_id)
 
 
+def _normalize(s: str) -> str:
+    """Remove accents so Mbappe matches Mbappé, Rudiger matches Rüdiger etc."""
+    import unicodedata
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower().strip()
+
+
+# Pre-build accent-normalized lookup
+_ESPN_NORM_MAP: dict = {}
+def _build_norm_map():
+    global _ESPN_NORM_MAP
+    _ESPN_NORM_MAP = {_normalize(k): v for k, v in ESPN_NAME_MAP.items()}
+
+_build_norm_map()
+
+
 def get_player_by_espn_name(name: str) -> dict | None:
     if not name:
         return None
     n = name.lower().strip()
+
+    nn = _normalize(n)  # accent-stripped version
+
+    # 1. Direct match (with and without accents)
     if n in ESPN_NAME_MAP:
         return ESPN_NAME_MAP[n]
-    last = n.split(".")[-1].strip()
-    if last in ESPN_NAME_MAP:
-        return ESPN_NAME_MAP[last]
-    for key, p in ESPN_NAME_MAP.items():
-        if last and (last in key or key in last):
-            return p
+    if nn in _ESPN_NORM_MAP:
+        return _ESPN_NORM_MAP[nn]
+
+    # 2. API returns "Surname I." — try reversing to "I. Surname"
+    parts = nn.split()
+    if len(parts) == 2:
+        reversed_name = parts[1] + " " + parts[0]
+        if reversed_name in _ESPN_NORM_MAP:
+            return _ESPN_NORM_MAP[reversed_name]
+
+    # 3. Last name only (strip initials and accents)
+    for part in parts:
+        part = part.strip(".")
+        if len(part) > 2 and part in _ESPN_NORM_MAP:
+            return _ESPN_NORM_MAP[part]
+
+    # 4. Partial match — normalized
+    for part in parts:
+        part = part.strip(".")
+        if len(part) <= 2:
+            continue
+        for key, p in _ESPN_NORM_MAP.items():
+            if part in key or key in part:
+                return p
+
     return None
 
 
