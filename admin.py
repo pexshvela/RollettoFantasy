@@ -1376,27 +1376,26 @@ async def cmd_testsportapi(message: Message, state: FSMContext):
                     "   📅 " + m['date'] + " | ID: <code>" + m['id'] + "</code>"
                 )
         else:
-            # No recent matches — find upcoming
-            upcoming = await get_upcoming_matches(tournament_ids, days_ahead=30)
+            # No recent matches — find ALL upcoming
+            upcoming = await get_upcoming_matches(tournament_ids, days_ahead=90)
             if upcoming:
-                # Group by date
                 from collections import defaultdict
                 by_date = defaultdict(list)
                 for m in upcoming:
                     by_date[m["date"]].append(m)
-
-                lines = ["\U0001f4c5 <b>No recent matches. Next UCL matches:</b>\n"]
+                lines = ["\u2705 <b>API working!</b> Upcoming fixtures:\n"]
                 for d_str in sorted(by_date.keys()):
                     lines.append("\n<b>" + d_str + "</b>")
                     for m in by_date[d_str]:
                         lines.append(
-                            "  \u23f3 " + m["home_team"] + " vs " + m["away_team"] + "\n" +
-                            "     ID: <code>" + m["id"] + "</code>"
+                            "  " + m["home_team"] + " vs " + m["away_team"] +
+                            " | ID: <code>" + m["id"] + "</code>"
                         )
+                lines.append("\n\nRun /fixtures to auto-add all to watchlist.")
             else:
                 lines = [
-                    "No UCL matches found in the next 30 days.",
-                    "Tournament IDs active: " + str(tournament_ids),
+                    "\u26a0\ufe0f No matches found.",
+                    "Tournament IDs: " + str(tournament_ids),
                 ]
 
         await message.answer("\n".join(lines), parse_mode="HTML")
@@ -1435,4 +1434,88 @@ async def cmd_testmatchsport(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
     except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("fixtures"))
+async def cmd_fixtures(message: Message, state: FSMContext):
+    """
+    Show ALL fixtures for active tournament(s) and auto-add future ones to watchlist.
+    Usage: /fixtures
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🔄 Fetching all tournament fixtures...")
+
+    try:
+        from football_api import get_all_tournament_fixtures
+        from datetime import date
+
+        tournament_ids = await sheets.get_tournament_ids()
+        all_matches = await get_all_tournament_fixtures(tournament_ids)
+
+        if not all_matches:
+            await message.answer("⚠️ No fixtures found for active tournaments.")
+            return
+
+        today = date.today().isoformat()
+
+        past     = [m for m in all_matches if m["date"] < today]
+        today_m  = [m for m in all_matches if m["date"] == today]
+        future   = [m for m in all_matches if m["date"] > today]
+
+        # Auto-add unfinished future matches to watchlist
+        added_ids = []
+        for m in today_m + future:
+            if m["status"] != "final":
+                await sheets.add_to_watchlist(m["id"])
+                added_ids.append(m["id"])
+
+        # Build message
+        lines = [f"📋 <b>All Fixtures</b> ({len(all_matches)} matches)\n"]
+
+        if past:
+            lines.append("✅ <b>Past results:</b>")
+            for m in past[-10:]:  # show last 10
+                lines.append(
+                    f"  {m['date']}: {m['home_team']} "
+                    f"{m['home_score']}-{m['away_score']} "
+                    f"{m['away_team']}"
+                )
+
+        if today_m:
+            lines.append("\n🔴 <b>Today:</b>")
+            for m in today_m:
+                lines.append(
+                    f"  {m['home_team']} vs {m['away_team']} "
+                    f"| ID: <code>{m['id']}</code>"
+                )
+
+        if future:
+            lines.append("\n⏳ <b>Upcoming:</b>")
+            for m in future[:15]:  # show next 15
+                lines.append(
+                    f"  📅 {m['date']}: {m['home_team']} vs {m['away_team']} "
+                    f"| ID: <code>{m['id']}</code>"
+                )
+
+        if added_ids:
+            lines.append(
+                f"\n✅ <b>Auto-added {len(added_ids)} match(es) to watchlist.</b>\n"
+                f"Bot will process them automatically when they finish."
+            )
+
+        # Split message if too long
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            # Send in chunks
+            for i in range(0, len(lines), 30):
+                chunk = "\n".join(lines[i:i+30])
+                await message.answer(chunk, parse_mode="HTML")
+        else:
+            await message.answer(text, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error("fixtures error: %s", e)
         await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
