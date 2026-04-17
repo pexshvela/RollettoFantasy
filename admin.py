@@ -1303,3 +1303,31 @@ async def cmd_cleancache(message: Message, state: FSMContext):
         f"Active filter: {', '.join(f'<code>{k}</code>' for k in keywords)}",
         parse_mode="HTML"
     )
+
+
+@router.message(Command("debugmatch"))
+async def cmd_debugmatch(message: Message, state: FSMContext):
+    """Debug why a match can't be fetched."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: /debugmatch <match_id>")
+        return
+    mid = parts[1]
+    import aiohttp, config, json
+    headers = {
+        "x-rapidapi-host": "flashscore4.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type": "application/json",
+    }
+    async with aiohttp.ClientSession() as s:
+        url = "https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/details"
+        async with s.get(url, headers=headers, params={"match_id": mid},
+                         timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            status = resp.status
+            text = await resp.text()
+    await message.answer(
+        f"HTTP: <code>{status}</code>\n<pre>{text[:3000]}</pre>",
+        parse_mode="HTML"
+    )
