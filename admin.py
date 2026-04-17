@@ -1143,17 +1143,21 @@ async def cmd_testlineup(message: Message, state: FSMContext):
 
 # ── Tournament filter ─────────────────────────────────────────────────────────
 
+# SofaScore uniqueTournament IDs
 KNOWN_TOURNAMENTS = {
-    "ucl":  ("Champions League", ["champions-league"]),
-    "pl":   ("Premier League",   ["premier-league", "england/premier-league"]),
-    "wc":   ("World Cup",        ["world-cup", "fifa-world-cup"]),
-    "el":   ("Europa League",    ["europa-league"]),
-    "ecl":  ("Conference League",["conference-league"]),
-    "laliga": ("La Liga",        ["laliga", "spain/laliga"]),
-    "seriea": ("Serie A",        ["serie-a", "italy/serie-a"]),
-    "bundesliga": ("Bundesliga", ["bundesliga", "germany/bundesliga"]),
-    "ligue1": ("Ligue 1",        ["ligue-1", "france/ligue-1"]),
+    "ucl":        ("Champions League",    7),
+    "pl":         ("Premier League",      17),
+    "laliga":     ("La Liga",             8),
+    "bundesliga": ("Bundesliga",          35),
+    "seriea":     ("Serie A",             23),
+    "ligue1":     ("Ligue 1",             34),
+    "el":         ("Europa League",       679),
+    "ecl":        ("Conference League",   17015),
+    "wc":         ("World Cup",           16),
+    "cl_asia":    ("AFC Champions League",NA := None),  # not available
 }
+# Remove None entries
+KNOWN_TOURNAMENTS = {k: v for k, v in KNOWN_TOURNAMENTS.items() if v[1] is not None}
 
 
 @router.message(Command("settournaments"))
@@ -1199,23 +1203,27 @@ async def cmd_settournaments(message: Message, state: FSMContext):
         if not keywords:
             await message.answer("❌ Provide at least one keyword after 'custom'.")
             return
-        await sheets.set_setting("tournament_keywords", keywords)
-        await message.answer(
-            f"✅ Custom tournament filter set:\n"
-            + "\n".join(f"  • <code>{k}</code>" for k in keywords),
-            parse_mode="HTML"
-        )
+        # Try to parse as numeric IDs
+        try:
+            ids = [int(x) for x in parts[1:]]
+            await sheets.set_setting("tournament_ids", ids)
+            await message.answer(f"✅ Custom tournament IDs set: {ids}")
+            return
+        except ValueError:
+            pass
+        await sheets.set_setting("tournament_ids", [])
+        await message.answer("❌ After 'custom' provide numeric SofaScore tournament IDs.")
         return
 
     # Shortcut mode
-    keywords = []
+    ids = []
     names = []
     unknown = []
     for code in parts:
         code_lower = code.lower()
         if code_lower in KNOWN_TOURNAMENTS:
-            name, kws = KNOWN_TOURNAMENTS[code_lower]
-            keywords.extend(kws)
+            name, tid = KNOWN_TOURNAMENTS[code_lower]
+            ids.append(tid)
             names.append(name)
         else:
             unknown.append(code)
@@ -1228,15 +1236,17 @@ async def cmd_settournaments(message: Message, state: FSMContext):
         )
         return
 
-    if not keywords:
+    if not ids:
         await message.answer("❌ No valid tournaments selected.")
         return
 
-    await sheets.set_setting("tournament_keywords", keywords)
+    await sheets.set_setting("tournament_ids", ids)
+    id_list = ", ".join(str(i) for i in ids)
     await message.answer(
         f"✅ <b>Tournament filter updated:</b>\n\n"
         + "\n".join(f"  🏆 {n}" for n in names) +
-        f"\n\nBot will now auto-scan and broadcast results for these tournaments only.",
+        f"\n\nSofaScore IDs: <code>{id_list}</code>\n"
+        f"Bot will now auto-scan and broadcast results for these only.",
         parse_mode="HTML"
     )
 
@@ -1331,3 +1341,109 @@ async def cmd_debugmatch(message: Message, state: FSMContext):
         f"HTTP: <code>{status}</code>\n<pre>{text[:3000]}</pre>",
         parse_mode="HTML"
     )
+
+
+@router.message(Command("testsportapi"))
+async def cmd_testsportapi(message: Message, state: FSMContext):
+    """Test SportAPI7 — shows recent/live/upcoming UCL matches."""
+    if not is_admin(message.from_user.id):
+        return
+    from datetime import date, timedelta
+    await message.answer("🔄 Testing SportAPI7...")
+    try:
+        from football_api import get_matches_by_date, get_upcoming_matches
+        tournament_ids = await sheets.get_tournament_ids()
+
+        # Check yesterday, today
+        found_matches = []
+        found_label = ""
+        for days_back, label in [(1, "yesterday"), (0, "today")]:
+            d = (date.today() - timedelta(days=days_back)).isoformat()
+            m = await get_matches_by_date(d, tournament_ids)
+            if m:
+                found_matches = m
+                found_label = label
+                break
+
+        if found_matches:
+            lines = [f"✅ <b>API working! Matches {found_label}:</b>
+"]
+            for m in found_matches:
+                emoji = {"final": "✅", "in_progress": "🔴"}.get(m["status"], "⏳")
+                lines.append(
+                    f"{emoji} <b>{m['home_team']}</b> "
+                    f"{m['home_score']}-{m['away_score']} "
+                    f"<b>{m['away_team']}</b>
+"
+                    f"   📅 {m['date']} | ID: <code>{m['id']}</code>"
+                )
+        else:
+            # No recent matches — find upcoming
+            upcoming = await get_upcoming_matches(tournament_ids, days_ahead=30)
+            if upcoming:
+                # Group by date
+                from collections import defaultdict
+                by_date = defaultdict(list)
+                for m in upcoming:
+                    by_date[m["date"]].append(m)
+
+                lines = ["📅 <b>No recent matches. Next UCL matches:</b>
+"]
+                for d_str in sorted(by_date.keys()):
+                    lines.append(f"
+<b>{d_str}</b>")
+                    for m in by_date[d_str]:
+                        lines.append(
+                            f"  ⏳ {m['home_team']} vs {m['away_team']}
+"
+                            f"     ID: <code>{m['id']}</code>"
+                        )
+            else:
+                lines = [
+                    "✅ <b>API is working</b> (connection OK)
+
+"
+                    "No UCL matches found in the next 30 days.
+"
+                    "Tournament IDs active: " +
+                    str(tournament_ids)
+                ]
+
+        await message.answer("
+".join(lines), parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("testmatchsport"))
+async def cmd_testmatchsport(message: Message, state: FSMContext):
+    """Test full match fetch with SportAPI7. Usage: /testmatchsport <event_id>"""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/testmatchsport &lt;event_id&gt;</code>", parse_mode="HTML")
+        return
+    eid = parts[1]
+    await message.answer(f"🔄 Fetching event <code>{eid}</code>...", parse_mode="HTML")
+    try:
+        from football_api import fetch_full_match
+        match = await fetch_full_match(eid)
+        if not match:
+            await message.answer("❌ Could not fetch match.")
+            return
+        ps = match.get("player_stats") or {}
+        ev = match.get("events") or []
+        played = match.get("played_ids") or set()
+        await message.answer(
+            f"✅ <b>{match['home_team']} {match['home_score']}-{match['away_score']} {match['away_team']}</b>\n"
+            f"Status: {match['status']} | Date: {match['date']}\n"
+            f"Players with stats: {len(ps)}\n"
+            f"Players who played: {len(played)}\n"
+            f"Events: {len(ev)}\n\n"
+            f"<b>Sample events:</b>\n" +
+            "\n".join(f"  {e['minute']}' {e['type']} — {e['player']}" for e in ev[:5]),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
