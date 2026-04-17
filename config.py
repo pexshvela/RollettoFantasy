@@ -50,8 +50,8 @@ FORMATIONS = {
 SUPPORTED_LANGUAGES = ["en", "it", "fr", "es"]
 # ── FlashScore API (via RapidAPI) ─────────────────────────────────────────────
 API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")   # your RapidAPI key
-API_FOOTBALL_HOST = os.getenv("API_FOOTBALL_HOST", "sportapi7.p.rapidapi.com")
-API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://sportapi7.p.rapidapi.com")
+API_FOOTBALL_HOST = os.getenv("API_FOOTBALL_HOST", "sofascore.p.rapidapi.com")
+API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://sofascore.p.rapidapi.com")
 
 # ── Tournament filter ─────────────────────────────────────────────────────────
 # Keywords matched against tournament_url from FlashScore list-by-date.
