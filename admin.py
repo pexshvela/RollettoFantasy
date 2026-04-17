@@ -1519,3 +1519,118 @@ async def cmd_fixtures(message: Message, state: FSMContext):
     except Exception as e:
         logger.error("fixtures error: %s", e)
         await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
+
+
+@router.message(Command("testdate"))
+async def cmd_testdate(message: Message, state: FSMContext):
+    """Test what matches SportAPI7 returns for a specific date.
+    Usage: /testdate 2026-04-18
+    """
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    from datetime import date, timedelta
+    d = parts[1] if len(parts) >= 2 else (date.today() + timedelta(days=1)).isoformat()
+
+    import aiohttp, config
+    headers = {
+        "X-RapidAPI-Key":  config.API_FOOTBALL_KEY,
+        "X-RapidAPI-Host": "sportapi7.p.rapidapi.com",
+    }
+    await message.answer(f"🔄 Fetching matches for {d}...")
+    async with aiohttp.ClientSession() as s:
+        async with s.get(
+            f"https://sportapi7.p.rapidapi.com/api/v1/sport/football/scheduled-events/{d}",
+            headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            status = resp.status
+            if status != 200:
+                await message.answer(f"❌ HTTP {status}")
+                return
+            data = await resp.json()
+
+    events = data.get("events") or []
+    if not events:
+        await message.answer(f"No events found for {d}")
+        return
+
+    # Group by tournament and show unique tournaments + sample matches
+    from collections import defaultdict
+    by_tournament = defaultdict(list)
+    for e in events:
+        t = e.get("tournament") or {}
+        ut = t.get("uniqueTournament") or {}
+        tid = ut.get("id", "?")
+        tname = ut.get("name") or t.get("name") or "?"
+        key = f"{tname} (ID:{tid})"
+        by_tournament[key].append(e)
+
+    lines = [f"📅 <b>{d}</b> — {len(events)} matches in {len(by_tournament)} tournaments\n"]
+    for tname, tevents in sorted(by_tournament.items()):
+        lines.append(f"\n<b>{tname}</b> ({len(tevents)} matches)")
+        for e in tevents[:2]:
+            home = (e.get("homeTeam") or {}).get("name","?")
+            away = (e.get("awayTeam") or {}).get("name","?")
+            eid  = e.get("id","?")
+            lines.append(f"  {home} vs {away} | ID:<code>{eid}</code>")
+        if len(tevents) > 2:
+            lines.append(f"  ... and {len(tevents)-2} more")
+
+    text = "\n".join(lines)
+    # Split if too long
+    for i in range(0, len(text), 4000):
+        await message.answer(text[i:i+4000], parse_mode="HTML")
+
+
+@router.message(Command("checkdate"))
+async def cmd_checkdate(message: Message, state: FSMContext):
+    """
+    Check what tournaments are available on a specific date.
+    Usage: /checkdate 2026-04-19
+    Shows tournament IDs so you can use them with /settournaments custom <id>
+    """
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        from datetime import date, timedelta
+        date_str = (date.today() + __import__('datetime').timedelta(days=1)).isoformat()
+    else:
+        date_str = parts[1]
+
+    await message.answer(f"🔄 Checking {date_str}...")
+
+    import aiohttp, config
+    headers = {
+        "X-RapidAPI-Key":  config.API_FOOTBALL_KEY,
+        "X-RapidAPI-Host": "sportapi7.p.rapidapi.com",
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.get(
+            f"https://sportapi7.p.rapidapi.com/api/v1/sport/football/scheduled-events/{date_str}",
+            headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+        ) as resp:
+            if resp.status != 200:
+                await message.answer(f"❌ HTTP {resp.status}")
+                return
+            data = await resp.json()
+
+    events = data.get("events") or []
+    # Group by tournament
+    tournaments = {}
+    for e in events:
+        t = e.get("tournament") or {}
+        ut = t.get("uniqueTournament") or {}
+        tid = ut.get("id")
+        tname = ut.get("name") or t.get("name") or "?"
+        if tid not in tournaments:
+            tournaments[tid] = {"name": tname, "count": 0}
+        tournaments[tid]["count"] += 1
+
+    lines = [f"📅 <b>{date_str}</b> — {len(events)} total matches\n",
+             "<b>Tournaments found:</b>"]
+    for tid, info in sorted(tournaments.items(), key=lambda x: -x[1]["count"])[:20]:
+        lines.append(f"  ID <code>{tid}</code> — {info['name']} ({info['count']} matches)")
+
+    lines.append("\nUse: /settournaments custom <id1> <id2>")
+    await message.answer("\n".join(lines), parse_mode="HTML")
