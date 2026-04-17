@@ -1762,8 +1762,10 @@ async def cmd_findtournament(message: Message, state: FSMContext):
     }
     await message.answer(f"Searching for '{query}'...")
     async with aiohttp.ClientSession() as s:
-        # Try category 1 = football
-        for cat_id in [1, 2, 3]:
+        # Search across UEFA category (categoryId=1568 is UEFA in Sofascore)
+        # Also try known UCL category IDs
+        found = []
+        for cat_id in [1568, 1569, 1, 689, 690]:
             async with s.get(
                 "https://sofascore.p.rapidapi.com/tournaments/list",
                 headers=headers, params={"categoryId": cat_id},
@@ -1778,9 +1780,30 @@ async def cmd_findtournament(message: Message, state: FSMContext):
                 for t in tournaments:
                     name = (t.get("name") or "").lower()
                     if query.lower() in name:
-                        tid = t.get("id")
-                        await message.answer(
-                            f"Found: <b>{t.get('name')}</b>\n"
-                            f"ID: <code>{tid}</code>",
-                            parse_mode="HTML"
-                        )
+                        found.append((t.get("name"), t.get("id"), cat_id))
+        if found:
+            lines = ["<b>Results for " + query + ":</b>\n"]
+            for name, tid, cid in found:
+                lines.append(f"  <b>{name}</b> — ID: <code>{tid}</code> (cat {cid})")
+            await message.answer("\n".join(lines), parse_mode="HTML")
+        else:
+            # Try direct season check for known UCL IDs
+            await message.answer(
+                f"Not found in categories. Trying known UCL IDs (7, 7172, 2)..."
+            )
+            for try_id in [7, 7172, 2, 100, 101]:
+                async with s.get(
+                    "https://sofascore.p.rapidapi.com/tournaments/get-seasons",
+                    headers=headers, params={"tournamentId": try_id},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+                seasons = data.get("seasons") or []
+                if seasons:
+                    first = seasons[0].get("name","")
+                    await message.answer(
+                        f"ID <code>{try_id}</code> → <b>{first}</b>",
+                        parse_mode="HTML"
+                    )
