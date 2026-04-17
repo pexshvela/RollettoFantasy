@@ -71,9 +71,10 @@ async def check_watchlist(bot=None):
 
 
 async def auto_scan_ucl(bot=None):
-    """Auto-detect UCL matches today/yesterday without manual input."""
+    """Auto-detect watched tournament matches today/yesterday without manual input."""
     try:
-        matches = await football_api.get_ucl_matches_today_and_yesterday()
+        tournament_ids = await sheets.get_tournament_ids()
+        matches = await football_api.get_ucl_matches_today_and_yesterday(tournament_ids)
         for m in matches:
             mid = m["id"]
             if mid in _processed or m["status"] != "final":
