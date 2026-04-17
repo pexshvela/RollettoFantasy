@@ -341,6 +341,8 @@ async def save_match_cache(match: dict):
             "away_score":     match.get("away_score", 0),
             "status":         match.get("status", "scheduled"),
             "match_date":     match.get("date", ""),
+            "tournament":     match.get("tournament", ""),
+            "tournament_url": match.get("tournament_url", ""),
             "events":         json.dumps(match.get("events", [])),
             "player_stats":   json.dumps(match.get("player_stats", {})),
             "points_awarded": match.get("points_awarded", False),
