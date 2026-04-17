@@ -1634,3 +1634,40 @@ async def cmd_checkdate(message: Message, state: FSMContext):
 
     lines.append("\nUse: /settournaments custom <id1> <id2>")
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("apitest"))
+async def cmd_apitest(message: Message, state: FSMContext):
+    """Raw test of SportAPI7 with a single date."""
+    if not is_admin(message.from_user.id):
+        return
+    import aiohttp, config, json
+    from datetime import date, timedelta
+
+    # Test tomorrow
+    date_str = (date.today() + timedelta(days=1)).isoformat()
+    await message.answer(f"Testing SportAPI7 for {date_str}...")
+
+    headers = {
+        "X-RapidAPI-Key":  config.API_FOOTBALL_KEY,
+        "X-RapidAPI-Host": "sportapi7.p.rapidapi.com",
+    }
+    url = f"https://sportapi7.p.rapidapi.com/api/v1/sport/football/scheduled-events/{date_str}"
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url, headers=headers,
+                         timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            status = resp.status
+            text = await resp.text()
+
+    await message.answer(
+        f"HTTP: <code>{status}</code>\n"
+        f"URL: <code>{url}</code>\n"
+        f"Key prefix: <code>{config.API_FOOTBALL_KEY[:8]}...</code>\n"
+        f"Response preview:\n<pre>{text[:1500]}</pre>",
+        parse_mode="HTML"
+    )
+
+    # Also show current tournament IDs setting
+    t_ids = await sheets.get_tournament_ids()
+    await message.answer(f"Active tournament IDs: <code>{t_ids}</code>", parse_mode="HTML")
