@@ -164,15 +164,19 @@ async def show_player_stats(callback: CallbackQuery, state: FSMContext):
 
 # ── Tournament matching helper ───────────────────────────────────────────────
 
-def _tournament_matches(tournament_name: str, keywords: list) -> bool:
-    t = tournament_name.lower()
+def _tournament_matches(tournament_name: str, keywords: list, t_url: str = "") -> bool:
+    tn = tournament_name.lower()
+    tu = t_url.lower()
     for kw in keywords:
-        kw_words = kw.lower().replace("-", " ").replace("_", " ")
-        if kw.lower() in t or kw_words in t:
-            return True
-        kw_parts = kw_words.split()
-        if len(kw_parts) == 1 and len(kw_parts[0]) > 5 and kw_parts[0] in t:
-            return True
+        kl = kw.lower()
+        kw_w = kl.replace("-"," ").replace("_"," ")
+        is_cl = ("champions" in kl and "league" in kw_w)
+        if kl in tn or kw_w in tn:
+            if is_cl:
+                if "uefa" in tn or any(x in tu for x in ["europe","uefa"]):
+                    return True
+            else:
+                return True
     return False
 
 
