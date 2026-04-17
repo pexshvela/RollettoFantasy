@@ -932,9 +932,7 @@ ADMIN_COMMANDS = """📖 <b>ADMIN COMMANDS REFERENCE</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 /schedulematch ID1 ID2
-<i>Add match IDs to watchlist at start of match day.
-Bot checks every 5 min, auto-awards points when match finishes.
-Get IDs from flashscore.com/match/<b>ID</b>/</i>
+<i>Add match IDs to watchlist. Bot checks every 5 min and auto-processes when finished. Get IDs from /testsportapi or /fixtures.</i>
 
 /watchlist
 <i>Show all matches currently being watched.</i>
@@ -943,15 +941,37 @@ Get IDs from flashscore.com/match/<b>ID</b>/</i>
 <i>Remove a match from watchlist.</i>
 
 /addmatch ID
-<i>Manually add & process an already-finished match.
-Use when you forgot to schedule it beforehand.</i>
+<i>Manually fetch and process an already-finished match.</i>
 
 /fixmatch ID
-<i>Reprocess a match (reset points_awarded and re-award).
-Use if stats were wrong the first time.</i>
+<i>Reprocess a match — re-awards points to all users. Use if stats were wrong.</i>
 
 /listmatches
-<i>Show all cached matches (last 60 days) with their status.</i>
+<i>Show all cached matches (last 60 days) with status.</i>
+
+/fixtures
+<i>Show ALL fixtures for active tournament(s) and auto-add future matches to watchlist.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>TOURNAMENT FILTER</b>
+━━━━━━━━━━━━━━━━━━━━
+
+/settournaments ucl
+/settournaments ucl pl
+/settournaments custom 7 17
+<i>Set which tournaments bot scans/broadcasts.
+Shortcuts: ucl(7) pl(17) laliga(8) bundesliga(35) seriea(23) ligue1(34) el(679) ecl(17015) wc(16)
+Multiple: /settournaments ucl pl
+Custom IDs: /settournaments custom 7 17</i>
+
+/tournaments
+<i>Show current active tournament filter and IDs.</i>
+
+/cleancache
+<i>Remove non-matching matches from match_cache based on active filter.</i>
+
+/checkdate 2026-04-19
+<i>Show all tournaments and their IDs for a specific date. Use to find IDs for /settournaments custom.</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 🔄 <b>CAMPAIGN / USERS</b>
@@ -959,8 +979,8 @@ Use if stats were wrong the first time.</i>
 
 /reset
 <i>Open reset panel:
-• Reset specific user(s) by Telegram ID
-• Full campaign reset (wipes all squads, points, transfers)</i>
+• Reset specific user(s) by Telegram ID — clears squad, budget, points
+• Full campaign reset — wipes everything for all users</i>
 
 /promo
 <i>Send a promo code to a specific user by Telegram ID.</i>
@@ -969,41 +989,30 @@ Use if stats were wrong the first time.</i>
 📨 <b>MESSAGING</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>Message User</b> (via Admin Panel button)
-<i>Send any message to a single user by Telegram ID.
-Supports text, photos, videos — no forwarded header.</i>
+<b>📨 Message User</b> (Admin Panel button)
+<i>Send any message (text, photo, video) to one user. No forwarded header.</i>
 
-<b>Broadcast</b> (via Admin Panel button)
-<i>Send a message to all users or a list of IDs.</i>
-
-━━━━━━━━━━━━━━━━━━━━
-⚙️ <b>TOURNAMENT FILTER</b>
-━━━━━━━━━━━━━━━━━━━━
-
-/settournaments ucl
-<i>Set tournament filter. Bot only broadcasts/scans these.
-Shortcuts: ucl, pl, wc, el, ecl, laliga, seriea, bundesliga, ligue1
-Multiple: /settournaments ucl pl el
-Custom: /settournaments custom my-keyword</i>
-
-/tournaments
-<i>Show current active tournament filter.</i>
+<b>📢 Broadcast</b> (Admin Panel button)
+<i>Send a message to all users or a list of specific IDs.</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 🔬 <b>API TESTING</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-/testflash
-<i>Test FlashScore API with example match. Shows raw JSON.</i>
+/testsportapi
+<i>Test SportAPI7 connection. Shows recent/upcoming UCL matches with IDs.</i>
 
-/testmatch ID
-<i>Fetch & parse a specific match. Shows what bot extracts.</i>
+/testmatchsport ID
+<i>Fetch and parse a specific match. Shows extracted score, players, events.</i>
 
-/testplayer ESPN_ID
-<i>Fetch a player by ESPN ID to verify mapping.</i>
+/apitest
+<i>Raw API test — shows exact HTTP response and active tournament IDs. Use if something is broken.</i>
 
-/testraw
-<i>Show raw /scores API response for debugging.</i>"""
+/rawmatch ID
+<i>Show all raw JSON keys for a match. Use to debug parsing issues.</i>
+
+/debugmatch ID
+<i>Debug why a match can't be fetched — shows raw HTTP response.</i>"""
 
 
 @router.callback_query(F.data == "admin:commands")
@@ -1439,87 +1448,77 @@ async def cmd_testmatchsport(message: Message, state: FSMContext):
 
 @router.message(Command("fixtures"))
 async def cmd_fixtures(message: Message, state: FSMContext):
-    """
-    Show ALL fixtures for active tournament(s) and auto-add future ones to watchlist.
-    Usage: /fixtures
-    """
+    """Fetch ALL fixtures for active tournament(s), save to Supabase."""
     if not is_admin(message.from_user.id):
         return
-
-    await message.answer("🔄 Fetching all tournament fixtures...")
-
+    await message.answer("Fetching all tournament fixtures...")
     try:
         from football_api import get_all_tournament_fixtures
         from datetime import date
-
         tournament_ids = await sheets.get_tournament_ids()
         all_matches = await get_all_tournament_fixtures(tournament_ids)
-
         if not all_matches:
-            await message.answer("⚠️ No fixtures found for active tournaments.")
+            await message.answer(
+                "No fixtures found. Subscribe to api-football on RapidAPI "
+                "and set Railway: API_FOOTBALL_HOST=api-football-v1.p.rapidapi.com"
+            )
             return
-
         today = date.today().isoformat()
-
-        past     = [m for m in all_matches if m["date"] < today]
-        today_m  = [m for m in all_matches if m["date"] == today]
-        future   = [m for m in all_matches if m["date"] > today]
-
-        # Auto-add unfinished future matches to watchlist
-        added_ids = []
-        for m in today_m + future:
-            if m["status"] != "final":
-                await sheets.add_to_watchlist(m["id"])
-                added_ids.append(m["id"])
-
-        # Build message
-        lines = [f"📋 <b>All Fixtures</b> ({len(all_matches)} matches)\n"]
-
+        saved = 0
+        for m in all_matches:
+            existing = await sheets.get_cached_match(m["id"])
+            if not existing:
+                await sheets.save_match_cache(m)
+                saved += 1
+            elif m["status"] == "final" and existing and not existing.get("points_awarded"):
+                await sheets.save_match_cache(m)
+        past   = [m for m in all_matches if m["date"] < today and m["status"] == "final"]
+        today_m= [m for m in all_matches if m["date"] == today]
+        future = [m for m in all_matches if m["date"] > today]
+        lines  = [
+            "<b>All Fixtures — " + str(len(all_matches)) + " matches</b>",
+            "Saved " + str(saved) + " new to cache. Scheduler auto-processes after kickoff+105min.",
+        ]
         if past:
-            lines.append("✅ <b>Past results:</b>")
-            for m in past[-10:]:  # show last 10
+            lines.append("")
+            lines.append("<b>Recent results:</b>")
+            for m in past[-8:]:
+                awarded = " (pts awarded)" if m.get("points_awarded") else ""
                 lines.append(
-                    f"  {m['date']}: {m['home_team']} "
-                    f"{m['home_score']}-{m['away_score']} "
-                    f"{m['away_team']}"
+                    m["date"] + ": " + m["home_team"] + " " +
+                    str(m["home_score"]) + "-" + str(m["away_score"]) +
+                    " " + m["away_team"] + awarded
                 )
-
         if today_m:
-            lines.append("\n🔴 <b>Today:</b>")
+            lines.append("")
+            lines.append("<b>Today:</b>")
             for m in today_m:
                 lines.append(
-                    f"  {m['home_team']} vs {m['away_team']} "
-                    f"| ID: <code>{m['id']}</code>"
+                    m.get("time","?") + " " + m["home_team"] +
+                    " vs " + m["away_team"] + " | " + m["id"]
                 )
-
         if future:
-            lines.append("\n⏳ <b>Upcoming:</b>")
-            for m in future[:15]:  # show next 15
+            lines.append("")
+            lines.append("<b>Upcoming:</b>")
+            for m in future[:25]:
                 lines.append(
-                    f"  📅 {m['date']}: {m['home_team']} vs {m['away_team']} "
-                    f"| ID: <code>{m['id']}</code>"
+                    m["date"] + " " + m.get("time","") +
+                    " — " + m["home_team"] + " vs " + m["away_team"] +
+                    " | <code>" + m["id"] + "</code>"
                 )
-
-        if added_ids:
-            lines.append(
-                f"\n✅ <b>Auto-added {len(added_ids)} match(es) to watchlist.</b>\n"
-                f"Bot will process them automatically when they finish."
-            )
-
-        # Split message if too long
+        lines.append("")
+        lines.append("Bot auto-processes each match ~105 min after kickoff.")
         text = "\n".join(lines)
         if len(text) > 4000:
-            # Send in chunks
-            for i in range(0, len(lines), 30):
-                chunk = "\n".join(lines[i:i+30])
-                await message.answer(chunk, parse_mode="HTML")
+            for i in range(0, len(lines), 25):
+                chunk = "\n".join(lines[i:i+25])
+                if chunk.strip():
+                    await message.answer(chunk, parse_mode="HTML")
         else:
             await message.answer(text, parse_mode="HTML")
-
     except Exception as e:
         logger.error("fixtures error: %s", e)
-        await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
-
+        await message.answer("Error: " + str(e))
 
 @router.message(Command("testdate"))
 async def cmd_testdate(message: Message, state: FSMContext):
@@ -1671,3 +1670,31 @@ async def cmd_apitest(message: Message, state: FSMContext):
     # Also show current tournament IDs setting
     t_ids = await sheets.get_tournament_ids()
     await message.answer(f"Active tournament IDs: <code>{t_ids}</code>", parse_mode="HTML")
+
+
+@router.message(Command("testendpoints"))
+async def cmd_testendpoints(message: Message, state: FSMContext):
+    """Test SportAPI7 tournament fixtures endpoints."""
+    if not is_admin(message.from_user.id):
+        return
+    import aiohttp, config
+    headers = {
+        "X-RapidAPI-Key":  config.API_FOOTBALL_KEY,
+        "X-RapidAPI-Host": "sportapi7.p.rapidapi.com",
+    }
+    # UCL unique tournament id = 7, need to find season id first
+    endpoints = [
+        "/api/v1/unique-tournament/7/seasons",
+        "/api/v1/sport/football/scheduled-events/2026-04-29",
+    ]
+    async with aiohttp.ClientSession() as s:
+        for ep in endpoints:
+            url = "https://sportapi7.p.rapidapi.com" + ep
+            async with s.get(url, headers=headers,
+                             timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                status = resp.status
+                text = await resp.text()
+            await message.answer(
+                f"<code>{ep}</code>\nHTTP {status}\n<pre>{text[:1000]}</pre>",
+                parse_mode="HTML"
+            )
