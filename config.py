@@ -61,4 +61,4 @@ API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://sofascore.p.rapidapi
 DEFAULT_TOURNAMENT_KEYWORDS = ["champions-league"]
 # SofaScore tournament IDs for SportAPI7
 # UCL=7, PL=17, LaLiga=8, Bundesliga=35, SerieA=23, EL=679, ECL=17015, WC=16
-DEFAULT_TOURNAMENT_IDS = [7]  # UCL only by default
+DEFAULT_TOURNAMENT_IDS = [7]  # UCL (confirmed ID on sofascore.p.rapidapi.com)
