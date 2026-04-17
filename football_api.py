@@ -391,16 +391,42 @@ async def get_active_keywords():
     except Exception:
         return ["champions-league"]
 
-async def get_upcoming_matches(tournament_ids: list[int] = None, days_ahead: int = 14) -> list[dict]:
-    """Scan next N days for matches in the given tournaments."""
+async def get_upcoming_matches(tournament_ids: list[int] = None, days_ahead: int = 60) -> list[dict]:
+    """Scan next N days for ALL matches in the given tournaments."""
     from datetime import date, timedelta
+    import asyncio
     if tournament_ids is None:
         tournament_ids = [UCL_TOURNAMENT_ID]
     matches = []
-    for i in range(1, days_ahead + 1):
+    for i in range(0, days_ahead + 1):
         d = (date.today() + timedelta(days=i)).isoformat()
         found = await get_matches_by_date(d, tournament_ids)
         matches.extend(found)
-        if matches:
-            break  # stop at the first day that has matches
+        await asyncio.sleep(0.3)  # small delay to be respectful
     return matches
+
+
+async def get_all_tournament_fixtures(tournament_ids: list[int] = None) -> list[dict]:
+    """
+    Get ALL fixtures for a tournament — past, present and future.
+    Scans 60 days back and 90 days forward.
+    """
+    from datetime import date, timedelta
+    import asyncio
+    if tournament_ids is None:
+        tournament_ids = [UCL_TOURNAMENT_ID]
+    matches = []
+    for i in range(-60, 91):
+        d = (date.today() + timedelta(days=i)).isoformat()
+        found = await get_matches_by_date(d, tournament_ids)
+        matches.extend(found)
+        if found:
+            await asyncio.sleep(0.3)
+    # Deduplicate by match ID
+    seen = set()
+    unique = []
+    for m in matches:
+        if m["id"] not in seen:
+            seen.add(m["id"])
+            unique.append(m)
+    return sorted(unique, key=lambda x: x["date"])
