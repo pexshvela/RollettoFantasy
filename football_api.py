@@ -73,18 +73,26 @@ async def get_ucl_matches_by_date(date_str: str) -> list[dict]:
         t_url = str(tournament.get("tournament_url") or "").lower()
         t_name = str(tournament.get("name") or "").lower()
 
-        def _kw_match(text, kws):
-            t = text.lower()
+        def _tm(tu, tn, kws):
             for kw in kws:
-                kw_words = kw.lower().replace("-"," ").replace("_"," ")
-                if kw.lower() in t or kw_words in t:
-                    return True
-                kw_parts = kw_words.split()
-                if len(kw_parts) == 1 and len(kw_parts[0]) > 5 and kw_parts[0] in t:
-                    return True
+                kl = kw.lower()
+                kw_w = kl.replace("-"," ").replace("_"," ")
+                is_cl = ("champions" in kl and "league" in kw_w)
+                if kl in tu or kw_w in tu:
+                    if is_cl:
+                        if any(x in tu for x in ["europe","uefa","ucl"]):
+                            return True
+                    else:
+                        return True
+                if kl in tn or kw_w in tn:
+                    if is_cl:
+                        if "uefa" in tn or any(x in tu for x in ["europe","uefa"]):
+                            return True
+                    else:
+                        return True
             return False
 
-        is_match = _kw_match(t_url, active_keywords) or _kw_match(t_name, active_keywords)
+        is_match = _tm(t_url, t_name, active_keywords)
         if not is_match:
             continue
 
@@ -110,16 +118,17 @@ async def get_ucl_matches_by_date(date_str: str) -> list[dict]:
             date_out = datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc).strftime("%Y-%m-%d") if ts else date_str
 
             ucl_matches.append({
-                "id":            mid,
-                "home_team":     home_team.get("name", "?"),
-                "away_team":     away_team.get("name", "?"),
-                "home_score":    int(float(scores.get("home") or 0)),
-                "away_score":    int(float(scores.get("away") or 0)),
-                "home_team_id":  home_team.get("team_id", ""),
-                "away_team_id":  away_team.get("team_id", ""),
-                "status":        status,
-                "date":          date_out,
-                "tournament":    tournament.get("name", ""),
+                "id":             mid,
+                "home_team":      home_team.get("name", "?"),
+                "away_team":      away_team.get("name", "?"),
+                "home_score":     int(float(scores.get("home") or 0)),
+                "away_score":     int(float(scores.get("away") or 0)),
+                "home_team_id":   home_team.get("team_id", ""),
+                "away_team_id":   away_team.get("team_id", ""),
+                "status":         status,
+                "date":           date_out,
+                "tournament":     tournament.get("name", ""),
+                "tournament_url": tournament.get("tournament_url", ""),
             })
 
     logger.info("Found %d UCL match(es) on %s", len(ucl_matches), date_str)
