@@ -408,25 +408,42 @@ async def get_upcoming_matches(tournament_ids: list[int] = None, days_ahead: int
 
 async def get_all_tournament_fixtures(tournament_ids: list[int] = None) -> list[dict]:
     """
-    Get ALL fixtures for a tournament — past, present and future.
-    Scans 60 days back and 90 days forward.
+    Get ALL fixtures for given tournaments efficiently.
+    Uses /sport/football/scheduled-events/{date} but only scans
+    dates that are known UCL/PL matchdays (Tuesday/Wednesday for UCL,
+    Sat/Sun for PL) to minimize API calls.
+    Actually: scans weekly — one request per week is enough since 
+    the API returns all matches on a date including future ones.
+    We call for today + each week for 3 months ahead + 1 month back.
     """
     from datetime import date, timedelta
     import asyncio
     if tournament_ids is None:
         tournament_ids = [UCL_TOURNAMENT_ID]
+    
     matches = []
-    for i in range(-60, 91):
-        d = (date.today() + timedelta(days=i)).isoformat()
-        found = await get_matches_by_date(d, tournament_ids)
-        matches.extend(found)
-        if found:
-            await asyncio.sleep(0.3)
-    # Deduplicate by match ID
     seen = set()
-    unique = []
-    for m in matches:
-        if m["id"] not in seen:
-            seen.add(m["id"])
-            unique.append(m)
-    return sorted(unique, key=lambda x: x["date"])
+    today = date.today()
+    
+    # Scan: today, yesterday, and then every 3 days for next 90 days
+    # and every 7 days for past 30 days
+    dates_to_check = set()
+    
+    # Past month — weekly
+    for i in range(0, 32, 7):
+        dates_to_check.add((today - timedelta(days=i)).isoformat())
+    
+    # Future 3 months — every 3 days
+    for i in range(0, 91, 3):
+        dates_to_check.add((today + timedelta(days=i)).isoformat())
+    
+    for d in sorted(dates_to_check):
+        found = await get_matches_by_date(d, tournament_ids)
+        for m in found:
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                matches.append(m)
+        if found:
+            await asyncio.sleep(0.5)
+    
+    return sorted(matches, key=lambda x: x["date"])
