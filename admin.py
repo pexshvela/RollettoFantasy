@@ -1745,3 +1745,42 @@ async def cmd_testsofascore(message: Message, state: FSMContext):
                     f"<b>Next matches (seasonId={sid}):</b> HTTP {status2}\n<pre>{text2[:2000]}</pre>",
                     parse_mode="HTML"
                 )
+
+
+@router.message(Command("findtournament"))
+async def cmd_findtournament(message: Message, state: FSMContext):
+    """Find tournament ID by name. Usage: /findtournament champions"""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split(maxsplit=1)
+    query = parts[1].lower() if len(parts) > 1 else "champions"
+    import aiohttp, config, json
+    headers = {
+        "x-rapidapi-host": "sofascore.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type":    "application/json",
+    }
+    await message.answer(f"Searching for '{query}'...")
+    async with aiohttp.ClientSession() as s:
+        # Try category 1 = football
+        for cat_id in [1, 2, 3]:
+            async with s.get(
+                "https://sofascore.p.rapidapi.com/tournaments/list",
+                headers=headers, params={"categoryId": cat_id},
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    continue
+                data = await resp.json()
+            groups = data.get("groups") or []
+            for group in groups:
+                tournaments = group.get("uniqueTournaments") or []
+                for t in tournaments:
+                    name = (t.get("name") or "").lower()
+                    if query.lower() in name:
+                        tid = t.get("id")
+                        await message.answer(
+                            f"Found: <b>{t.get('name')}</b>\n"
+                            f"ID: <code>{tid}</code>",
+                            parse_mode="HTML"
+                        )
