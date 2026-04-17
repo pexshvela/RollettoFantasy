@@ -510,7 +510,20 @@ async def set_setting(key: str, value):
         logger.error("set_setting error: %s", e)
 
 
-async def get_tournament_keywords() -> list[str]:
-    """Get current tournament filter keywords."""
+async def get_tournament_keywords() -> list:
+    """Get current tournament filter — returns list of ints (SofaScore IDs) or strings."""
     import config
+    setting = await get_setting("tournament_ids", config.DEFAULT_TOURNAMENT_IDS)
+    if setting is not None:
+        return setting
+    # fallback to keyword list for backward compat
     return await get_setting("tournament_keywords", config.DEFAULT_TOURNAMENT_KEYWORDS)
+
+
+async def get_tournament_ids() -> list[int]:
+    """Get current tournament IDs for SportAPI7 filtering."""
+    import config
+    ids = await get_setting("tournament_ids", config.DEFAULT_TOURNAMENT_IDS)
+    if ids and isinstance(ids[0], int):
+        return ids
+    return config.DEFAULT_TOURNAMENT_IDS
