@@ -29,13 +29,12 @@ HEADERS = {
     "Content-Type":    "application/json",
 }
 
-# Known tournament IDs for this API — confirm with /testtournaments
+# Confirmed tournament IDs for sofascore.p.rapidapi.com
 TOURNAMENT_IDS = {
-    "ucl":        17,
-    "pl":         17,   # update after /testtournaments
+    "ucl":        7,
+    "pl":         17,
     "laliga":     8,
     "bundesliga": 35,
-    "seriea":     23,
     "ligue1":     34,
     "el":         679,
 }
