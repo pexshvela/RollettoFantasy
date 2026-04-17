@@ -1366,16 +1366,14 @@ async def cmd_testsportapi(message: Message, state: FSMContext):
                 break
 
         if found_matches:
-            lines = [f"✅ <b>API working! Matches {found_label}:</b>
-"]
+            lines = ["✅ <b>API working! Matches " + found_label + ":</b>\n"]
             for m in found_matches:
                 emoji = {"final": "✅", "in_progress": "🔴"}.get(m["status"], "⏳")
                 lines.append(
-                    f"{emoji} <b>{m['home_team']}</b> "
-                    f"{m['home_score']}-{m['away_score']} "
-                    f"<b>{m['away_team']}</b>
-"
-                    f"   📅 {m['date']} | ID: <code>{m['id']}</code>"
+                    emoji + " <b>" + m['home_team'] + "</b> " +
+                    str(m['home_score']) + "-" + str(m['away_score']) + " " +
+                    "<b>" + m['away_team'] + "</b>\n" +
+                    "   📅 " + m['date'] + " | ID: <code>" + m['id'] + "</code>"
                 )
         else:
             # No recent matches — find upcoming
@@ -1387,30 +1385,21 @@ async def cmd_testsportapi(message: Message, state: FSMContext):
                 for m in upcoming:
                     by_date[m["date"]].append(m)
 
-                lines = ["📅 <b>No recent matches. Next UCL matches:</b>
-"]
+                lines = ["\U0001f4c5 <b>No recent matches. Next UCL matches:</b>\n"]
                 for d_str in sorted(by_date.keys()):
-                    lines.append(f"
-<b>{d_str}</b>")
+                    lines.append("\n<b>" + d_str + "</b>")
                     for m in by_date[d_str]:
                         lines.append(
-                            f"  ⏳ {m['home_team']} vs {m['away_team']}
-"
-                            f"     ID: <code>{m['id']}</code>"
+                            "  \u23f3 " + m["home_team"] + " vs " + m["away_team"] + "\n" +
+                            "     ID: <code>" + m["id"] + "</code>"
                         )
             else:
                 lines = [
-                    "✅ <b>API is working</b> (connection OK)
-
-"
-                    "No UCL matches found in the next 30 days.
-"
-                    "Tournament IDs active: " +
-                    str(tournament_ids)
+                    "No UCL matches found in the next 30 days.",
+                    "Tournament IDs active: " + str(tournament_ids),
                 ]
 
-        await message.answer("
-".join(lines), parse_mode="HTML")
+        await message.answer("\n".join(lines), parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ Error: <code>{e}</code>", parse_mode="HTML")
 
