@@ -754,7 +754,7 @@ async def cmd_addmatch(message: Message, state: FSMContext):
         # Award points if match is finished
         if match["status"] == "final" and match.get("player_stats"):
             from scheduler import award_points
-            await award_points(match, match["player_stats"], message.bot)
+            await award_points(match, message.bot)
             await message.answer(
                 f"✅ <b>Done!</b> Points awarded to all users.\n"
                 f"Users have been notified.",
@@ -830,7 +830,7 @@ async def cmd_fixmatch(message: Message, state: FSMContext):
         match["points_awarded"] = False
         await sheets.save_match_cache(match)
         if match["status"] == "final" and match.get("player_stats"):
-            await award_points(match, match["player_stats"], message.bot)
+            await award_points(match, message.bot)
             await message.answer("✅ Reprocessed. Points re-awarded to all users.")
         else:
             await message.answer(f"⚠️ Match status: {match['status']}. No points awarded.")
@@ -1264,20 +1264,27 @@ async def cmd_cleancache(message: Message, state: FSMContext):
     keywords = await sheets.get_tournament_keywords()
     all_matches = await sheets.get_recent_matches(days=60)
 
-    def _t_matches(tournament_name, kws):
-        t = tournament_name.lower()
+    def _t_matches(tn, tu, kws):
+        tn, tu = tn.lower(), tu.lower()
         for kw in kws:
-            kw_words = kw.lower().replace("-"," ").replace("_"," ")
-            if kw.lower() in t or kw_words in t:
-                return True
-            kw_parts = kw_words.split()
-            if len(kw_parts) == 1 and len(kw_parts[0]) > 5 and kw_parts[0] in t:
-                return True
+            kl = kw.lower()
+            kw_w = kl.replace("-"," ").replace("_"," ")
+            is_cl = ("champions" in kl and "league" in kw_w)
+            if kl in tn or kw_w in tn:
+                if is_cl:
+                    if "uefa" in tn or any(x in tu for x in ["europe","uefa"]):
+                        return True
+                else:
+                    return True
         return False
 
     to_delete = [
         m["match_id"] for m in all_matches
-        if not _t_matches(m.get("tournament") or "", keywords)
+        if not _t_matches(
+            m.get("tournament") or "",
+            m.get("tournament_url") or "",
+            keywords
+        )
     ]
 
     if not to_delete:
