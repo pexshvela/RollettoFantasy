@@ -50,8 +50,8 @@ FORMATIONS = {
 SUPPORTED_LANGUAGES = ["en", "it", "fr", "es"]
 # ── FlashScore API (via RapidAPI) ─────────────────────────────────────────────
 API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")   # your RapidAPI key
-API_FOOTBALL_HOST = os.getenv("API_FOOTBALL_HOST", "flashscore4.p.rapidapi.com")
-API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://flashscore4.p.rapidapi.com")
+API_FOOTBALL_HOST = os.getenv("API_FOOTBALL_HOST", "sportapi7.p.rapidapi.com")
+API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://sportapi7.p.rapidapi.com")
 
 # ── Tournament filter ─────────────────────────────────────────────────────────
 # Keywords matched against tournament_url from FlashScore list-by-date.
@@ -59,3 +59,6 @@ API_FOOTBALL_BASE = os.getenv("API_FOOTBALL_BASE", "https://flashscore4.p.rapida
 # Admin can change this at runtime with /settournaments command.
 # Default: Champions League only.
 DEFAULT_TOURNAMENT_KEYWORDS = ["champions-league"]
+# SofaScore tournament IDs for SportAPI7
+# UCL=7, PL=17, LaLiga=8, Bundesliga=35, SerieA=23, EL=679, ECL=17015, WC=16
+DEFAULT_TOURNAMENT_IDS = [7]  # UCL only by default
