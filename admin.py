@@ -1698,3 +1698,50 @@ async def cmd_testendpoints(message: Message, state: FSMContext):
                 f"<code>{ep}</code>\nHTTP {status}\n<pre>{text[:1000]}</pre>",
                 parse_mode="HTML"
             )
+
+
+@router.message(Command("testsofascore"))
+async def cmd_testsofascore(message: Message, state: FSMContext):
+    """Test Sofascore API — get seasons + sample fixtures."""
+    if not is_admin(message.from_user.id):
+        return
+    import aiohttp, config
+    headers = {
+        "x-rapidapi-host": "sofascore.p.rapidapi.com",
+        "x-rapidapi-key":  config.API_FOOTBALL_KEY,
+        "Content-Type":    "application/json",
+    }
+    await message.answer("Testing Sofascore API...")
+    async with aiohttp.ClientSession() as s:
+        # Test 1: get seasons for tournamentId=17 (UCL)
+        async with s.get(
+            "https://sofascore.p.rapidapi.com/tournaments/get-seasons",
+            headers=headers, params={"tournamentId": "17"},
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            status = resp.status
+            text   = await resp.text()
+        await message.answer(
+            f"<b>Seasons (tournamentId=17):</b> HTTP {status}\n<pre>{text[:1500]}</pre>",
+            parse_mode="HTML"
+        )
+
+        if status == 200:
+            # Test 2: get next matches
+            import json
+            data = json.loads(text)
+            seasons = data.get("seasons") or []
+            if seasons:
+                sid = seasons[0].get("id") or seasons[0].get("seasonId")
+                async with s.get(
+                    "https://sofascore.p.rapidapi.com/tournaments/get-next-matches",
+                    headers=headers,
+                    params={"tournamentId": "17", "seasonId": str(sid), "pageIndex": "0"},
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp2:
+                    status2 = resp2.status
+                    text2   = await resp2.text()
+                await message.answer(
+                    f"<b>Next matches (seasonId={sid}):</b> HTTP {status2}\n<pre>{text2[:2000]}</pre>",
+                    parse_mode="HTML"
+                )
