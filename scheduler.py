@@ -1,18 +1,17 @@
 """
-scheduler.py — Background scheduler.
+scheduler.py — Smart scheduler based on kickoff times.
 
-Every 5 min:
-  1. Check watchlist for finished matches → process them
-  2. Auto-scan today/yesterday for UCL matches (via list-by-date)
-
-When a match finishes:
-  - Fetch lineups → know exactly who played
-  - Fetch player stats
-  - Award points ONLY to players who actually played (in lineup)
-  - Broadcast result
+Flow:
+  - /fixtures command fetches all matches and saves to match_cache with kickoff_timestamp
+  - Scheduler runs every 5 min but only calls API when:
+      * A match's kickoff_timestamp + 105 min (avg match duration) has passed
+      * AND match is not yet processed (points_awarded = False)
+  - This means 0 API calls on non-match days
+  - After kickoff+105min: fetch stats → if not finished yet, retry in 20 min
 """
 import asyncio
 import logging
+import time
 import unicodedata
 
 import sheets
@@ -22,8 +21,12 @@ from players import ALL_PLAYERS, get_player_by_espn_name
 
 logger = logging.getLogger(__name__)
 
-_processed: set[str] = set()
-POLL_INTERVAL = 5 * 60  # 5 minutes
+AVG_MATCH_DURATION = 100 * 60   # 100 min — first check (90 + ~10 min buffer)
+RETRY_INTERVAL     = 15 * 60    # retry every 15 min if not finished yet
+MAX_WAIT           = 60 * 60    # give up after 60 min of retries (AET/penalties edge case)
+POLL_INTERVAL      = 5 * 60     # scheduler loop every 5 min
+
+_processing: set[str] = set()
 
 
 def _norm(s: str) -> str:
@@ -31,11 +34,10 @@ def _norm(s: str) -> str:
 
 
 async def run_scheduler(bot=None):
-    logger.info("Scheduler started.")
+    logger.info("Scheduler started — checking every %d min.", POLL_INTERVAL // 60)
     while True:
         try:
-            await check_watchlist(bot)
-            await auto_scan_ucl(bot)
+            await check_due_matches(bot)
             await asyncio.sleep(POLL_INTERVAL)
         except asyncio.CancelledError:
             break
@@ -44,68 +46,83 @@ async def run_scheduler(bot=None):
             await asyncio.sleep(60)
 
 
-async def check_watchlist(bot=None):
-    """Process any watched matches that are now finished."""
-    watchlist = await sheets.get_watchlist()
-    if not watchlist:
+async def check_due_matches(bot=None):
+    """
+    Check match_cache for matches that should now be finished.
+    A match is due when: current_time >= kickoff_timestamp + AVG_MATCH_DURATION
+    """
+    now = int(time.time())
+
+    # Get all unprocessed matches from cache
+    unprocessed = await sheets.get_unprocessed_matches()
+    if not unprocessed:
         return
-    for entry in watchlist:
-        mid = entry["match_id"]
-        if mid in _processed:
+
+    for match in unprocessed:
+        mid          = match.get("match_id") or match.get("id", "")
+        kickoff_ts   = int(match.get("kickoff_timestamp") or 0)
+        last_checked = int(match.get("last_checked") or 0)
+
+        if not mid:
             continue
+
+        # If no kickoff timestamp, process immediately (old cached matches)
+        if kickoff_ts:
+            if now < kickoff_ts + AVG_MATCH_DURATION:
+                remaining = (kickoff_ts + AVG_MATCH_DURATION - now) // 60
+                logger.debug("Match %s not due yet — %d min remaining", mid, remaining)
+                continue
+
+        # Skip if checked recently (within RETRY_INTERVAL)
+        if last_checked and now - last_checked < RETRY_INTERVAL:
+            continue
+
+        # Give up if we've been retrying for more than MAX_WAIT after expected end
+        if kickoff_ts and last_checked:
+            expected_end = kickoff_ts + AVG_MATCH_DURATION
+            if now > expected_end + MAX_WAIT and last_checked > expected_end:
+                logger.warning(
+                    "Match %s still not finished after %d min of retries — "
+                    "will keep trying every 15 min", mid, MAX_WAIT // 60
+                )
+                # Don't skip — keep retrying indefinitely for AET/penalty shootouts
+
+        if mid in _processing:
+            continue
+
+        _processing.add(mid)
         try:
-            details = await football_api.get_match_details(mid)
-            if not details:
-                continue
-            if details["status"] == "final":
-                logger.info("Watched match finished: %s vs %s",
-                            details["home_team"], details["away_team"])
-                await process_finished_match(mid, details, bot)
-                await sheets.mark_watchlist_processed(mid)
-                _processed.add(mid)
-            else:
-                logger.debug("Match %s still %s", mid, details["status"])
+            logger.info("Checking match %s (%s vs %s)",
+                        mid, match.get("home_team"), match.get("away_team"))
+            await sheets.update_match_last_checked(mid)
+            await process_due_match(mid, match, bot)
         except Exception as e:
-            logger.error("Watchlist check error for %s: %s", mid, e)
-        await asyncio.sleep(2)
+            logger.error("Error processing match %s: %s", mid, e)
+        finally:
+            _processing.discard(mid)
+
+        await asyncio.sleep(2)  # small delay between matches
 
 
-async def auto_scan_ucl(bot=None):
-    """Auto-detect watched tournament matches today/yesterday without manual input."""
-    try:
-        tournament_ids = await sheets.get_tournament_ids()
-        matches = await football_api.get_ucl_matches_today_and_yesterday(tournament_ids)
-        for m in matches:
-            mid = m["id"]
-            if mid in _processed or m["status"] != "final":
-                continue
-            cached = await sheets.get_cached_match(mid)
-            if cached and cached.get("points_awarded"):
-                _processed.add(mid)
-                continue
-            logger.info("Auto-detected finished UCL match: %s vs %s",
-                        m["home_team"], m["away_team"])
-            await process_finished_match(mid, m, bot)
-            _processed.add(mid)
-    except Exception as e:
-        logger.error("auto_scan_ucl error: %s", e)
-
-
-async def process_finished_match(match_id: str, match_stub: dict, bot=None):
-    """Fetch full match data and award points."""
-    # Check not already done
-    cached = await sheets.get_cached_match(match_id)
-    if cached and cached.get("points_awarded"):
-        logger.info("Match %s already processed.", match_id)
+async def process_due_match(match_id: str, cached_match: dict, bot=None):
+    """Fetch latest data and process if finished."""
+    # Fetch current match status
+    details = await football_api.get_match_details(match_id)
+    if not details:
+        logger.warning("Could not fetch details for %s", match_id)
         return
 
-    # Fetch everything
+    if details["status"] != "final":
+        logger.info("Match %s still %s — will retry in %d min",
+                    match_id, details["status"], RETRY_INTERVAL // 60)
+        return
+
+    # Match is finished — fetch full data
     full = await football_api.fetch_full_match(match_id)
     if not full:
-        logger.error("Could not fetch full match %s", match_id)
         return
 
-    # Save to cache
+    # Update cache with final score and stats
     await sheets.save_match_cache(full)
 
     if not full.get("player_stats"):
@@ -118,10 +135,7 @@ async def process_finished_match(match_id: str, match_stub: dict, bot=None):
 
 
 async def award_points(match: dict, bot=None):
-    """
-    Award fantasy points to all users.
-    Only players who ACTUALLY PLAYED get points (checked via lineups).
-    """
+    """Calculate and save fantasy points for all users."""
     mid          = match.get("id") or match.get("match_id", "")
     home_team    = match["home_team"]
     away_team    = match["away_team"]
@@ -132,10 +146,9 @@ async def award_points(match: dict, bot=None):
 
     player_stats_raw = match.get("player_stats") or {}
     lineups          = match.get("lineups") or {}
-    played_ids       = lineups.get("played_ids") or set()  # FlashScore player_ids who played
+    played_ids       = lineups.get("played_ids") or set()
 
-    # Build team side lookup
-    team_side: dict[str, str] = {}
+    team_side = {}
     if home_team_id: team_side[home_team_id] = "home"
     if away_team_id: team_side[away_team_id] = "away"
 
@@ -144,42 +157,36 @@ async def award_points(match: dict, bot=None):
         if _team_matches(team_name, away_team): return "away"
         return ""
 
-    # Build group of bot players per team for fallback matching
-    home_bots = {pid: p for pid, p in ALL_PLAYERS.items() if _team_matches(p["team"], home_team)}
-    away_bots = {pid: p for pid, p in ALL_PLAYERS.items() if _team_matches(p["team"], away_team)}
+    home_bots = {pid: p for pid, p in ALL_PLAYERS.items()
+                 if _team_matches(p["team"], home_team)}
+    away_bots = {pid: p for pid, p in ALL_PLAYERS.items()
+                 if _team_matches(p["team"], away_team)}
 
-    # Map FlashScore stats → bot player_id
-    # player_stats_raw is keyed by both flashscore_player_id AND lowercase name
     bot_player_stats: dict[str, dict] = {}
 
     for key, stats in player_stats_raw.items():
-        fs_player_id = stats.get("player_id", "")
-        api_name     = stats.get("name", "")
-        api_team_id  = stats.get("team_id", "")
-        side         = team_side.get(api_team_id, "")
+        fs_pid      = stats.get("player_id", "")
+        api_name    = stats.get("name", "")
+        api_team_id = stats.get("team_id", "")
+        side        = team_side.get(api_team_id, "")
+        minutes     = int(stats.get("minutes_played") or 0)
 
-        # ── Check if player actually played ──────────────────────────────────
-        # Primary check: FlashScore player_id in played_ids from lineups
-        # Fallback: in_lineup=True in player-stats response
+        # Only players who actually played
         actually_played = (
-            (fs_player_id and fs_player_id in played_ids) or
+            (fs_pid and fs_pid in played_ids) or
             stats.get("in_lineup", False) or
-            int(stats.get("minutes_played") or 0) > 0
+            minutes > 0
         )
         if not actually_played:
-            logger.debug("Skipping %s — not in lineup", api_name)
             continue
 
-        # ── Match to bot player ───────────────────────────────────────────────
+        # Match to bot player
         bot_player = get_player_by_espn_name(api_name)
-
-        # Discard if name matched but wrong team
         if bot_player and side:
             bp_side = _side_for_team(bot_player["team"])
             if bp_side and bp_side != side:
                 bot_player = None
 
-        # Fallback: same team + overlapping name parts
         if not bot_player and side:
             candidates = home_bots if side == "home" else away_bots
             api_parts = {_norm(p.strip(".")) for p in api_name.replace(".", " ").split()
@@ -195,7 +202,6 @@ async def award_points(match: dict, bot=None):
         if not bot_player:
             continue
 
-        # ── Set clean sheet + goals conceded ─────────────────────────────────
         bp_side = _side_for_team(bot_player["team"]) or side
         if bp_side == "home":
             stats["goals_conceded"] = away_score
@@ -206,10 +212,9 @@ async def award_points(match: dict, bot=None):
 
         bot_player_stats[bot_player["id"]] = stats
 
-    logger.info("Matched %d bot players with stats for %s vs %s",
+    logger.info("Matched %d bot players for %s vs %s",
                 len(bot_player_stats), home_team, away_team)
 
-    # Award points to every user
     users = await sheets.get_all_users()
     updated = 0
 
@@ -220,7 +225,6 @@ async def award_points(match: dict, bot=None):
             continue
 
         captain_id = user_row.get("captain", "")
-
         try:
             formation = squad.get("formation", "4-3-3") or "4-3-3"
             p = formation.split("-")
@@ -229,28 +233,24 @@ async def award_points(match: dict, bot=None):
             n_def, n_mid, n_fwd = 4, 3, 3
 
         starter_slots = (
-            ["gk1"]
-            + [f"def{i}" for i in range(1, n_def + 1)]
-            + [f"mf{i}"  for i in range(1, n_mid + 1)]
-            + [f"fw{i}"  for i in range(1, n_fwd + 1)]
+            ["gk1"] +
+            [f"def{i}" for i in range(1, n_def + 1)] +
+            [f"mf{i}"  for i in range(1, n_mid + 1)] +
+            [f"fw{i}"  for i in range(1, n_fwd + 1)]
         )
-        sub_slots  = [f"sub{i}" for i in range(1, 5)]
-        all_slots  = starter_slots + sub_slots
+        sub_slots = [f"sub{i}" for i in range(1, 5)]
         user_total = 0
 
-        for slot in all_slots:
+        for slot in starter_slots + sub_slots:
             pid = squad.get(slot)
             if not pid or pid not in bot_player_stats:
                 continue
-
             stats      = bot_player_stats[pid]
             is_captain = pid == captain_id
             breakdown  = build_breakdown(pid, stats, is_captain)
-            breakdown["match"] = (f"{home_team} {home_score}-{away_score} {away_team}")
+            breakdown["match"] = f"{home_team} {home_score}-{away_score} {away_team}"
             final_pts  = breakdown.get("total", 0)
-
             await sheets.save_player_match_points(uid, pid, mid, final_pts, breakdown)
-
             if slot in starter_slots:
                 user_total += final_pts
 
@@ -261,27 +261,23 @@ async def award_points(match: dict, bot=None):
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
     await sheets.mark_match_points_awarded(mid)
-
     if bot:
         await _broadcast(bot, match, points_awarded=True)
 
 
 async def _broadcast(bot, match: dict, points_awarded: bool):
     users = await sheets.get_all_users()
+    score = f"{match['home_score']}-{match['away_score']}"
     if points_awarded:
         text = (
             f"⚽ <b>Match Result</b>\n\n"
-            f"🏟 <b>{match['home_team']}</b> "
-            f"{match['home_score']} - {match['away_score']} "
-            f"<b>{match['away_team']}</b>\n\n"
+            f"🏟 <b>{match['home_team']}</b> {score} <b>{match['away_team']}</b>\n\n"
             f"🏆 Points updated! Tap <b>📊 Stats</b> to see your score."
         )
     else:
         text = (
             f"⚽ <b>Match Result</b>\n\n"
-            f"🏟 <b>{match['home_team']}</b> "
-            f"{match['home_score']} - {match['away_score']} "
-            f"<b>{match['away_team']}</b>\n\n"
+            f"🏟 <b>{match['home_team']}</b> {score} <b>{match['away_team']}</b>\n\n"
             f"<i>Player stats updating...</i>"
         )
     sent = 0
@@ -298,23 +294,18 @@ async def _broadcast(bot, match: dict, points_awarded: bool):
 def _team_matches(bot_team: str, api_team: str) -> bool:
     if not bot_team or not api_team:
         return False
-    b = _norm(bot_team)
-    a = _norm(api_team)
+    b, a = _norm(bot_team), _norm(api_team)
     ALIASES = {
-        "atletico": ["atletico de madrid", "atletico madrid", "atl. madrid", "atl madrid"],
-        "psg":      ["paris saint-germain", "paris sg", "paris saint germain"],
-        "arsenal":  ["arsenal fc"],
-        "liverpool":["liverpool fc"],
-        "barcelona":["fc barcelona"],
+        "atletico":  ["atletico de madrid", "atletico madrid"],
+        "psg":       ["paris saint-germain", "paris sg"],
+        "arsenal":   ["arsenal fc"],
+        "liverpool": ["liverpool fc"],
+        "barcelona": ["fc barcelona"],
         "real madrid": ["real madrid cf"],
-        "bayern":   ["fc bayern munchen", "fc bayern munich", "bayern munich",
-                     "fc bayern munchen", "bavern munchen"],
-        "sporting": ["sporting cp", "sporting clube de portugal"],
-        "atalanta": ["atalanta bc"],
-        "leverkusen": ["bayer leverkusen", "bayer 04 leverkusen"],
-        "feyenoord": ["feyenoord rotterdam"],
-        "lille":    ["losc lille"],
-        "ajax":     ["afc ajax"],
+        "bayern":    ["fc bayern munchen", "fc bayern munich", "bayern munich"],
+        "sporting":  ["sporting cp"],
+        "atalanta":  ["atalanta bc"],
+        "leverkusen":["bayer leverkusen", "bayer 04 leverkusen"],
     }
     for canonical, alts in ALIASES.items():
         all_names = [_norm(canonical)] + [_norm(x) for x in alts]
