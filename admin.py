@@ -1782,3 +1782,37 @@ async def cmd_findtournament(message: Message, state: FSMContext):
         )
     else:
         await message.answer("Nothing found.")
+
+
+
+
+@router.message(Command("wipecache"))
+async def cmd_wipecache(message: Message, state: FSMContext):
+    """
+    Wipe ALL match_cache entries and start fresh.
+    Use when cache has stale/wrong matches from old tournament IDs.
+    After wiping run /fixtures to repopulate with correct matches.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2 or parts[1] != "confirm":
+        await message.answer(
+            "⚠️ This will delete ALL cached matches.\n\n"
+            "Run /fixtures again after to repopulate.\n\n"
+            "To confirm: /wipecache confirm"
+        )
+        return
+    try:
+        # Delete all rows from match_cache
+        sb = sheets._get_sb()
+        # Supabase requires a filter — use neq on a column that's always set
+        sb.table("match_cache").delete().neq("match_id", "").execute()
+        await message.answer(
+            "✅ match_cache wiped.\n\n"
+            "Now run:\n"
+            "1. /settournaments ucl  (or ucl pl etc.)\n"
+            "2. /fixtures  — to fetch and cache all correct matches"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Error: {e}")
