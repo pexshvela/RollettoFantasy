@@ -334,18 +334,20 @@ async def save_match_cache(match: dict):
     import json
     try:
         _get_sb().table("match_cache").upsert({
-            "match_id":       match["id"],
-            "home_team":      match.get("home_team", ""),
-            "away_team":      match.get("away_team", ""),
-            "home_score":     match.get("home_score", 0),
-            "away_score":     match.get("away_score", 0),
-            "status":         match.get("status", "scheduled"),
-            "match_date":     match.get("date", ""),
-            "tournament":     match.get("tournament", ""),
-            "tournament_url": match.get("tournament_url", ""),
-            "events":         json.dumps(match.get("events", [])),
-            "player_stats":   json.dumps(match.get("player_stats", {})),
-            "points_awarded": match.get("points_awarded", False),
+            "match_id":          match["id"],
+            "home_team":         match.get("home_team", ""),
+            "away_team":         match.get("away_team", ""),
+            "home_score":        match.get("home_score", 0),
+            "away_score":        match.get("away_score", 0),
+            "status":            match.get("status", "scheduled"),
+            "match_date":        match.get("date", ""),
+            "match_time":        match.get("time", ""),
+            "kickoff_timestamp": match.get("kickoff_timestamp", 0),
+            "tournament":        match.get("tournament", ""),
+            "tournament_url":    match.get("tournament_url", ""),
+            "events":            json.dumps(match.get("events", [])),
+            "player_stats":      json.dumps(match.get("player_stats", {})),
+            "points_awarded":    match.get("points_awarded", False),
         }).execute()
     except Exception as e:
         logger.error("save_match_cache error: %s", e)
@@ -521,9 +523,38 @@ async def get_tournament_keywords() -> list:
 
 
 async def get_tournament_ids() -> list[int]:
-    """Get current tournament IDs for SportAPI7 filtering."""
+    """Get current tournament IDs. Always returns valid ints."""
     import config
     ids = await get_setting("tournament_ids", config.DEFAULT_TOURNAMENT_IDS)
-    if ids and isinstance(ids[0], int):
-        return ids
-    return config.DEFAULT_TOURNAMENT_IDS
+    if not ids:
+        return config.DEFAULT_TOURNAMENT_IDS
+    # Convert to ints (might be stored as strings)
+    try:
+        return [int(i) for i in ids]
+    except Exception:
+        return config.DEFAULT_TOURNAMENT_IDS
+
+
+async def get_unprocessed_matches() -> list[dict]:
+    """Get all matches that are not yet points_awarded, ordered by kickoff time."""
+    try:
+        res = _get_sb().table("match_cache").select(
+            "match_id, home_team, away_team, home_score, away_score, "
+            "status, match_date, kickoff_timestamp, last_checked, "
+            "tournament, tournament_url, points_awarded"
+        ).eq("points_awarded", False).order("kickoff_timestamp").execute()
+        return res.data or []
+    except Exception as e:
+        logger.error("get_unprocessed_matches error: %s", e)
+        return []
+
+
+async def update_match_last_checked(match_id: str):
+    """Record when we last tried to process a match."""
+    import time
+    try:
+        _get_sb().table("match_cache").update(
+            {"last_checked": int(time.time())}
+        ).eq("match_id", match_id).execute()
+    except Exception as e:
+        logger.error("update_match_last_checked error: %s", e)
