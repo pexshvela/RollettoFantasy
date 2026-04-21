@@ -1452,11 +1452,15 @@ async def cmd_fixtures(message: Message, state: FSMContext):
         from football_api import get_all_tournament_fixtures
         from datetime import date
         tournament_ids = await sheets.get_tournament_ids()
+        await message.answer(
+            "Using tournament IDs: " + str(tournament_ids) + "\n"
+            "Fetching from sofascore.p.rapidapi.com..."
+        )
         all_matches = await get_all_tournament_fixtures(tournament_ids)
         if not all_matches:
             await message.answer(
-                "No fixtures found. Subscribe to api-football on RapidAPI "
-                "and set Railway: API_FOOTBALL_HOST=api-football-v1.p.rapidapi.com"
+                "No fixtures found for IDs: " + str(tournament_ids) + "\n"
+                "Try /settournaments ucl to reset to correct IDs."
             )
             return
         today = date.today().isoformat()
