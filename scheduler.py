@@ -49,11 +49,11 @@ async def run_scheduler(bot=None):
 async def check_due_matches(bot=None):
     """
     Check match_cache for matches that should now be finished.
-    A match is due when: current_time >= kickoff_timestamp + AVG_MATCH_DURATION
+    Only processes matches where kickoff_timestamp is set AND past due.
+    Matches with no kickoff_timestamp are skipped (need /fixtures first).
     """
     now = int(time.time())
 
-    # Get all unprocessed matches from cache
     unprocessed = await sheets.get_unprocessed_matches()
     if not unprocessed:
         return
@@ -66,26 +66,18 @@ async def check_due_matches(bot=None):
         if not mid:
             continue
 
-        # If no kickoff timestamp, process immediately (old cached matches)
-        if kickoff_ts:
-            if now < kickoff_ts + AVG_MATCH_DURATION:
-                remaining = (kickoff_ts + AVG_MATCH_DURATION - now) // 60
-                logger.debug("Match %s not due yet — %d min remaining", mid, remaining)
-                continue
-
-        # Skip if checked recently (within RETRY_INTERVAL)
-        if last_checked and now - last_checked < RETRY_INTERVAL:
+        # Skip matches with no kickoff time — these are stale cache entries
+        # Run /fixtures to refresh them with proper kickoff times
+        if not kickoff_ts:
             continue
 
-        # Give up if we've been retrying for more than MAX_WAIT after expected end
-        if kickoff_ts and last_checked:
-            expected_end = kickoff_ts + AVG_MATCH_DURATION
-            if now > expected_end + MAX_WAIT and last_checked > expected_end:
-                logger.warning(
-                    "Match %s still not finished after %d min of retries — "
-                    "will keep trying every 15 min", mid, MAX_WAIT // 60
-                )
-                # Don't skip — keep retrying indefinitely for AET/penalty shootouts
+        # Not due yet
+        if now < kickoff_ts + AVG_MATCH_DURATION:
+            continue
+
+        # Skip if checked recently
+        if last_checked and now - last_checked < RETRY_INTERVAL:
+            continue
 
         if mid in _processing:
             continue
