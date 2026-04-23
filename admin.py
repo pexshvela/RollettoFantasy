@@ -1466,19 +1466,27 @@ async def cmd_fixtures(message: Message, state: FSMContext):
             )
             return
         today = date.today().isoformat()
+        from datetime import datetime, timedelta
+        week_ago = (datetime.today() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        # Only save last 7 days + future — skip old completed matches
+        relevant = [m for m in all_matches if m["date"] >= week_ago]
+
         saved = 0
-        for m in all_matches:
+        for m in relevant:
             existing = await sheets.get_cached_match(m["id"])
             if not existing:
+                # Mark past finished matches as already awarded — scheduler won't touch them
+                if m["status"] == "final" and m["date"] < today:
+                    m["points_awarded"] = True
                 await sheets.save_match_cache(m)
                 saved += 1
-            elif m["status"] == "final" and existing and not existing.get("points_awarded"):
-                await sheets.save_match_cache(m)
-        past   = [m for m in all_matches if m["date"] < today and m["status"] == "final"]
-        today_m= [m for m in all_matches if m["date"] == today]
-        future = [m for m in all_matches if m["date"] > today]
+
+        past   = [m for m in relevant if m["date"] < today and m["status"] == "final"]
+        today_m= [m for m in relevant if m["date"] == today]
+        future = [m for m in relevant if m["date"] > today]
         lines  = [
-            "<b>All Fixtures — " + str(len(all_matches)) + " matches</b>",
+            "<b>All Fixtures — " + str(len(relevant)) + " relevant matches (of " + str(len(all_matches)) + " total)</b>",
             "Saved " + str(saved) + " new to cache. Scheduler auto-processes after kickoff+105min.",
         ]
         if past:
