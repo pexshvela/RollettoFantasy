@@ -1,19 +1,23 @@
 """
-football_api.py — Sofascore API (sofascore.p.rapidapi.com)
+football_api.py — api-football v3 (api-football-v1.p.rapidapi.com)
 
-Host: sofascore.p.rapidapi.com
-Key endpoints:
-  GET /tournaments/get-seasons?tournamentId=17        → season IDs
-  GET /tournaments/get-next-matches?tournamentId=17&seasonId=X&pageIndex=0  → upcoming
-  GET /tournaments/get-last-matches?tournamentId=17&seasonId=X&pageIndex=0  → past
-  GET /matches/detail?matchId=X                       → score, status, teams
-  GET /matches/get-lineups?matchId=X                  → who played + stats
-  GET /matches/get-incidents?matchId=X                → goals, cards, assists
+Key: e23260ce6329642ba416e6e185140894
+Host: api-football-v1.p.rapidapi.com
+Base: https://api-football-v1.p.rapidapi.com/v3
 
-Tournament IDs (Sofascore):
-  UCL = 17, PL = 17... wait — UCL is actually 7 in SofaScore native.
-  The example uses tournamentId=17 which maps to UCL in THIS api wrapper.
-  Confirm with /tournaments/list?categoryId=1
+League IDs:
+  UCL = 2   (season 2024)
+  PL  = 39  (season 2024)
+  La Liga = 140, Bundesliga = 78, Serie A = 135, Ligue 1 = 61
+  Europa League = 3, Conference League = 848
+  World Cup = 1
+
+Endpoints used:
+  GET /fixtures?league=2&season=2024         → all UCL fixtures
+  GET /fixtures?id=123456                    → single match details
+  GET /fixtures/lineups?fixture=123456       → lineups
+  GET /fixtures/players?fixture=123456       → per-player stats
+  GET /fixtures/events?fixture=123456        → goals, cards, assists
 """
 import logging
 import asyncio
@@ -22,25 +26,47 @@ import config
 
 logger = logging.getLogger(__name__)
 
-BASE    = "https://sofascore.p.rapidapi.com"
+BASE    = "https://v3.football.api-sports.io"
 HEADERS = {
-    "x-rapidapi-host": "sofascore.p.rapidapi.com",
-    "x-rapidapi-key":  config.API_FOOTBALL_KEY,
-    "Content-Type":    "application/json",
+    "x-apisports-key": config.API_FOOTBALL_KEY,
 }
 
-# Confirmed tournament IDs for sofascore.p.rapidapi.com
-TOURNAMENT_IDS = {
-    "ucl":        7,
-    "pl":         17,
-    "laliga":     8,
-    "bundesliga": 35,
-    "ligue1":     34,
-    "el":         679,
+# api-football league IDs
+LEAGUE_IDS = {
+    "ucl":        2,
+    "pl":         39,
+    "laliga":     140,
+    "bundesliga": 78,
+    "seriea":     135,
+    "ligue1":     61,
+    "el":         3,
+    "ecl":        848,
+    "wc":         1,
 }
 
-# Cache season IDs to avoid repeated calls
-_season_cache: dict[int, int] = {}
+# Current season per league
+SEASONS = {
+    2:   2024,
+    39:  2024,
+    140: 2024,
+    78:  2024,
+    135: 2024,
+    61:  2024,
+    3:   2024,
+    848: 2024,
+}
+
+# Map from our internal tournament IDs (used in bot_settings) to api-football IDs
+# When admin does /settournaments ucl, we store 2 (api-football ID)
+SOFASCORE_TO_AF = {
+    7:   2,    # UCL
+    17:  39,   # PL
+    8:   140,  # La Liga
+    35:  78,   # Bundesliga
+    23:  135,  # Serie A
+    34:  61,   # Ligue 1
+    679: 3,    # Europa League
+}
 
 
 async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | None]:
@@ -48,7 +74,7 @@ async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | None]:
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(url, headers=HEADERS, params=params,
-                             timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                             timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status == 200:
                     return 200, await resp.json()
                 logger.error("HTTP %s for %s params=%s", resp.status, url, params)
@@ -58,159 +84,79 @@ async def _get(endpoint: str, params: dict = None) -> tuple[int, dict | None]:
         return 0, None
 
 
-# ── Seasons ───────────────────────────────────────────────────────────────────
+# ── 1. Get all fixtures for a league ─────────────────────────────────────────
 
-async def get_current_season_id(tournament_id: int) -> int | None:
-    """Get the most recent season ID for a tournament."""
-    if tournament_id in _season_cache:
-        return _season_cache[tournament_id]
-
-    code, data = await _get("/tournaments/get-seasons",
-                            {"tournamentId": tournament_id})
+async def get_fixtures(af_league_id: int) -> list[dict]:
+    """Get ALL fixtures for a league/season."""
+    season = SEASONS.get(af_league_id, 2024)
+    code, data = await _get("/fixtures", {"league": af_league_id, "season": season})
     if code != 200 or not data:
-        return None
-
-    seasons = data.get("seasons") or []
-    if not seasons:
-        return None
-
-    # Most recent = first in list
-    season_id = seasons[0].get("id") or seasons[0].get("seasonId")
-    if season_id:
-        _season_cache[tournament_id] = int(season_id)
-        logger.info("Tournament %d → season %d", tournament_id, season_id)
-    return int(season_id) if season_id else None
-
-
-# ── Fixtures ──────────────────────────────────────────────────────────────────
-
-async def get_fixtures(tournament_id: int) -> list[dict]:
-    """
-    Get ALL fixtures (past + upcoming) for a tournament.
-    Paginates through both get-last-matches and get-next-matches.
-    """
-    season_id = await get_current_season_id(tournament_id)
-    if not season_id:
-        logger.error("Could not get season ID for tournament %d", tournament_id)
+        logger.error("get_fixtures HTTP %s for league %s", code, af_league_id)
         return []
-
-    all_matches = []
-
-    # Upcoming matches — paginate until empty
-    for page in range(10):  # max 10 pages
-        code, data = await _get("/tournaments/get-next-matches", {
-            "tournamentId": tournament_id,
-            "seasonId":     season_id,
-            "pageIndex":    page,
-        })
-        if code != 200 or not data:
-            break
-        events = data.get("events") or []
-        if not events:
-            break
-        for e in events:
-            all_matches.append(_parse_event(e))
-        if len(events) < 10:  # less than full page = last page
-            break
-        await asyncio.sleep(0.3)
-
-    # Past matches — paginate
-    for page in range(20):  # more pages for past
-        code, data = await _get("/tournaments/get-last-matches", {
-            "tournamentId": tournament_id,
-            "seasonId":     season_id,
-            "pageIndex":    page,
-        })
-        if code != 200 or not data:
-            break
-        events = data.get("events") or []
-        if not events:
-            break
-        for e in events:
-            all_matches.append(_parse_event(e))
-        if len(events) < 10:
-            break
-        await asyncio.sleep(0.3)
-
-    # Deduplicate
-    seen = set()
-    unique = []
-    for m in all_matches:
-        if m["id"] not in seen:
-            seen.add(m["id"])
-            unique.append(m)
-
-    return sorted(unique, key=lambda x: (x["date"], x.get("time", "")))
+    return [_parse_fixture(f) for f in (data.get("response") or [])]
 
 
-def _parse_event(e: dict) -> dict:
-    """Normalize a Sofascore event to our standard format."""
+def _parse_fixture(f: dict) -> dict:
     import datetime
+    fixture  = f.get("fixture") or {}
+    teams    = f.get("teams") or {}
+    goals    = f.get("goals") or {}
+    league   = f.get("league") or {}
+    home     = teams.get("home") or {}
+    away     = teams.get("away") or {}
+    status   = fixture.get("status") or {}
 
-    home = e.get("homeTeam") or {}
-    away = e.get("awayTeam") or {}
-
-    hs  = e.get("homeScore") or {}
-    as_ = e.get("awayScore") or {}
-    home_score = int(hs.get("current") or hs.get("normaltime") or 0)
-    away_score = int(as_.get("current") or as_.get("normaltime") or 0)
-
-    status_obj  = e.get("status") or {}
-    status_type = str(status_obj.get("type") or "").lower()
-    status_desc = str(status_obj.get("description") or "").lower()
-
-    if status_type == "finished" or "finished" in status_desc:
-        status = "final"
-    elif status_type == "inprogress" or "progress" in status_type:
-        status = "in_progress"
+    status_short = str(status.get("short") or "").upper()
+    if status_short in ("FT", "AET", "PEN"):
+        match_status = "final"
+    elif status_short in ("1H", "HT", "2H", "ET", "P", "LIVE", "BT"):
+        match_status = "in_progress"
     else:
-        status = "scheduled"
+        match_status = "scheduled"
 
-    ts = e.get("startTimestamp") or e.get("timestamp")
-    if ts:
-        dt       = datetime.datetime.fromtimestamp(int(ts))
+    kickoff_ts = fixture.get("timestamp") or 0
+    if kickoff_ts:
+        dt       = datetime.datetime.fromtimestamp(int(kickoff_ts))
         date_str = dt.strftime("%Y-%m-%d")
         time_str = dt.strftime("%H:%M")
     else:
-        date_str = ""
-        time_str = ""
-
-    tournament = e.get("tournament") or {}
-    ut         = tournament.get("uniqueTournament") or {}
+        raw_date = str(fixture.get("date") or "")
+        date_str = raw_date[:10]
+        time_str = raw_date[11:16]
 
     return {
-        "id":                str(e.get("id", "") or e.get("matchId", "")),
-        "home_team":         home.get("name") or home.get("shortName") or "?",
-        "away_team":         away.get("name") or away.get("shortName") or "?",
-        "home_score":        home_score,
-        "away_score":        away_score,
+        "id":                str(fixture.get("id", "")),
+        "home_team":         home.get("name", "?"),
+        "away_team":         away.get("name", "?"),
+        "home_score":        int(goals.get("home") or 0),
+        "away_score":        int(goals.get("away") or 0),
         "home_team_id":      str(home.get("id", "")),
         "away_team_id":      str(away.get("id", "")),
-        "status":            status,
+        "status":            match_status,
         "date":              date_str,
         "time":              time_str,
-        "kickoff_timestamp": int(ts) if ts else 0,
-        "tournament":        ut.get("name") or tournament.get("name") or "",
-        "tournament_url":    f"/tournament/{ut.get('id', '')}",
+        "kickoff_timestamp": int(kickoff_ts),
+        "tournament":        league.get("name", ""),
+        "tournament_url":    f"/football/league/{league.get('id', '')}/",
+        "league_id":         league.get("id", 0),
     }
 
 
-# ── Single match details ──────────────────────────────────────────────────────
+# ── 2. Single match details ───────────────────────────────────────────────────
 
-async def get_match_details(match_id: str) -> dict | None:
-    code, data = await _get("/matches/detail", {"matchId": match_id})
+async def get_match_details(fixture_id: str) -> dict | None:
+    code, data = await _get("/fixtures", {"id": fixture_id})
     if code != 200 or not data:
         return None
-    e = data.get("event") or data.get("match") or data
-    return _parse_event(e)
+    resp = data.get("response") or []
+    return _parse_fixture(resp[0]) if resp else None
 
 
-# ── Lineups ───────────────────────────────────────────────────────────────────
+# ── 3. Lineups ────────────────────────────────────────────────────────────────
 
-async def get_lineups(match_id: str) -> dict:
-    code, data = await _get("/matches/get-lineups", {"matchId": match_id})
+async def get_lineups(fixture_id: str) -> dict:
+    code, data = await _get("/fixtures/lineups", {"fixture": fixture_id})
     if code != 200 or not data:
-        logger.warning("get_lineups HTTP %s for %s", code, match_id)
         return {}
 
     result = {
@@ -221,183 +167,173 @@ async def get_lineups(match_id: str) -> dict:
         "starter_ids":   set(),
     }
 
-    for side in ("home", "away"):
-        side_data = data.get(side) or {}
-        team_obj  = side_data.get("team") or {}
-        team_id   = str(team_obj.get("id") or "")
+    sides = data.get("response") or []
+    for i, side_data in enumerate(sides):
+        side    = "home" if i == 0 else "away"
+        team    = side_data.get("team") or {}
+        team_id = str(team.get("id", ""))
         result[f"{side}_team_id"] = team_id
 
-        players = side_data.get("players") or []
-        for p in players:
-            player_obj = p.get("player") or {}
-            pid        = str(player_obj.get("id") or "")
-            name       = player_obj.get("name") or player_obj.get("shortName") or ""
-            stats_raw  = p.get("statistics") or {}
-            minutes    = int(stats_raw.get("minutesPlayed") or stats_raw.get("minutes") or 0)
-            is_sub     = bool(p.get("substitute"))
-
+        for p_entry in (side_data.get("startXI") or []):
+            p   = p_entry.get("player") or {}
+            pid = str(p.get("id", ""))
             entry = {
-                "name":           name,
-                "player_id":      pid,
-                "sofascore_name": player_obj.get("shortName") or name,
-                "position":       p.get("position") or p.get("positionName") or "",
-                "minutes_played": minutes,
-                "team_id":        team_id,
-                "side":           side,
-                "stats":          stats_raw,
+                "name": p.get("name", ""), "player_id": pid,
+                "team_id": team_id, "side": side,
+                "position": p.get("pos", ""), "number": str(p.get("number", "")),
             }
+            result[f"{side}_starters"].append(entry)
+            if pid:
+                result["starter_ids"].add(pid)
+                result["played_ids"].add(pid)
 
-            if not is_sub:
-                result[f"{side}_starters"].append(entry)
-                if pid:
-                    result["starter_ids"].add(pid)
-                    if minutes > 0:
-                        result["played_ids"].add(pid)
-            else:
-                result[f"{side}_subs"].append(entry)
-                if pid and minutes > 0:
-                    result["played_ids"].add(pid)
+        for p_entry in (side_data.get("substitutes") or []):
+            p   = p_entry.get("player") or {}
+            pid = str(p.get("id", ""))
+            result[f"{side}_subs"].append({
+                "name": p.get("name", ""), "player_id": pid,
+                "team_id": team_id, "side": side,
+            })
 
     return result
 
 
-def extract_player_stats_from_lineups(lineups: dict) -> dict:
-    """Extract per-player stats from lineups response."""
+# ── 4. Player stats ───────────────────────────────────────────────────────────
+
+async def get_player_stats(fixture_id: str) -> dict | None:
+    code, data = await _get("/fixtures/players", {"fixture": fixture_id})
+    if code != 200 or not data:
+        return None
+
     result = {}
-    all_sides = [
-        ("home", lineups.get("home_starters", []) + lineups.get("home_subs", [])),
-        ("away", lineups.get("away_starters", []) + lineups.get("away_subs", [])),
-    ]
-    for side, players in all_sides:
-        for p in players:
-            pid  = p.get("player_id", "")
-            name = p.get("name", "")
-            raw  = p.get("stats") or {}
+    for team_data in (data.get("response") or []):
+        team_id = str((team_data.get("team") or {}).get("id", ""))
+        for p_entry in (team_data.get("players") or []):
+            p     = p_entry.get("player") or {}
+            stats = (p_entry.get("statistics") or [{}])[0]
+            pid   = str(p.get("id", ""))
+            name  = p.get("name", "")
 
-            def sv(key):
-                v = raw.get(key) or 0
-                try: return int(float(v))
-                except: return 0
+            games    = stats.get("games")    or {}
+            goals_s  = stats.get("goals")    or {}
+            cards_s  = stats.get("cards")    or {}
+            tackles_s= stats.get("tackles")  or {}
+            penalty_s= stats.get("penalty")  or {}
 
-            goals     = sv("goals")
-            own_goals = sv("ownGoals")
-            minutes   = sv("minutesPlayed") or sv("minutes") or p.get("minutes_played", 0)
+            minutes = int(games.get("minutes") or 0)
 
-            stats = {
+            s = {
                 "name":             name,
-                "sofascore_name":   p.get("sofascore_name", name),
                 "player_id":        pid,
-                "team_id":          p.get("team_id", ""),
-                "side":             side,
-                "position":         p.get("position", ""),
+                "team_id":          team_id,
+                "position":         games.get("position", ""),
                 "minutes_played":   minutes,
                 "in_lineup":        minutes > 0,
-                "goals":            max(0, goals - own_goals),
-                "own_goals":        own_goals,
-                "assists":          sv("goalAssist") or sv("assists"),
-                "yellow_cards":     sv("yellowCards") or sv("yellowCard"),
-                "red_cards":        sv("redCards") or sv("redCard"),
-                "yellow_then_red":  sv("yellowRedCards") or sv("yellowRedCard"),
-                "penalty_miss":     sv("missedPenalties") or sv("penaltyMiss"),
-                "penalty_earned":   sv("penaltiesWon") or sv("penaltyEarned"),
-                "penalty_conceded": sv("penaltiesConceded") or 0,
-                "penalty_saved":    sv("savedPenalties") or sv("penaltySaved"),
-                "saves":            sv("saves") or sv("totalSaves"),
-                "tackles":          sv("tackleWon") or sv("tackles"),
-                "interceptions":    sv("interceptions") or sv("interceptionWon"),
-                "blocks":           sv("blockedScoringAttempt") or sv("blocks"),
+                "goals":            int(goals_s.get("total") or 0),
+                "own_goals":        int(goals_s.get("owngoals") or 0),
+                "assists":          int(goals_s.get("assists") or 0),
+                "yellow_cards":     int(cards_s.get("yellow") or 0),
+                "red_cards":        int(cards_s.get("red") or 0),
+                "yellow_then_red":  int(cards_s.get("yellowred") or 0),
+                "saves":            int(goals_s.get("saves") or 0),
+                "penalty_saved":    int(penalty_s.get("saved") or 0),
+                "penalty_miss":     int(penalty_s.get("missed") or 0),
+                "penalty_earned":   int(penalty_s.get("won") or 0),
+                "penalty_conceded": int(penalty_s.get("commited") or 0),
+                "tackles":          int(tackles_s.get("total") or 0),
+                "interceptions":    int(tackles_s.get("interceptions") or 0),
+                "blocks":           int(tackles_s.get("blocks") or 0),
                 "goals_conceded":   0,
                 "clean_sheet":      False,
             }
-            if pid:
-                result[pid] = stats
-            if name:
-                result[name.lower()] = stats
+            if pid:   result[pid]          = s
+            if name:  result[name.lower()] = s
+
     return result
 
 
-# ── Incidents ─────────────────────────────────────────────────────────────────
+# ── 5. Match events ───────────────────────────────────────────────────────────
 
-async def get_match_incidents(match_id: str) -> list[dict]:
-    code, data = await _get("/matches/get-incidents", {"matchId": match_id})
+async def get_match_incidents(fixture_id: str) -> list[dict]:
+    code, data = await _get("/fixtures/events", {"fixture": fixture_id})
     if code != 200 or not data:
         return []
 
-    incidents_raw = data.get("incidents") or []
     events = []
+    for e in (data.get("response") or []):
+        etype_raw  = str(e.get("type") or "").lower()
+        detail_raw = str(e.get("detail") or "").lower()
+        player_obj = e.get("player") or {}
+        assist_obj = e.get("assist") or {}
+        minute     = str((e.get("time") or {}).get("elapsed") or "")
+        team_name  = (e.get("team") or {}).get("name", "")
 
-    for inc in incidents_raw:
-        itype  = str(inc.get("incidentType") or inc.get("type") or "").lower()
-        iclass = str(inc.get("incidentClass") or inc.get("class") or "").lower()
-
-        if itype == "goal":
-            etype = "own_goal" if "own" in iclass else "goal"
-        elif itype == "card":
-            if "yellowred" in iclass:
+        if etype_raw == "goal":
+            etype = "own_goal" if "own" in detail_raw else "goal"
+        elif etype_raw == "card":
+            if "yellow" in detail_raw and "red" in detail_raw:
                 etype = "yellow_then_red"
-            elif "red" in iclass:
+            elif "red" in detail_raw:
                 etype = "red_card"
             else:
                 etype = "yellow_card"
-        elif itype == "missedpenalty" or ("penalty" in itype and "miss" in iclass):
-            etype = "penalty_miss"
         else:
             continue
 
-        player_obj = inc.get("player") or {}
-        assist_obj = inc.get("assist1") or inc.get("assist") or {}
-
         events.append({
             "type":   etype,
-            "minute": str(inc.get("time") or inc.get("minute") or ""),
-            "player": player_obj.get("name") or player_obj.get("shortName") or "",
-            "assist": assist_obj.get("name") or assist_obj.get("shortName") or "",
-            "team":   "home" if inc.get("isHome") else "away",
+            "minute": minute,
+            "player": player_obj.get("name", ""),
+            "assist": assist_obj.get("name", ""),
+            "team":   team_name,
         })
-
     return events
 
 
-# ── Full match fetch ──────────────────────────────────────────────────────────
+# ── 6. Full match fetch ────────────────────────────────────────────────────────
 
-async def fetch_full_match(match_id: str) -> dict | None:
-    details = await get_match_details(match_id)
+async def fetch_full_match(fixture_id: str) -> dict | None:
+    details = await get_match_details(fixture_id)
     if not details:
         return None
-
-    lineups      = await get_lineups(match_id)
-    player_stats = extract_player_stats_from_lineups(lineups)
-    events       = await get_match_incidents(match_id)
-
+    lineups      = await get_lineups(fixture_id)
+    player_stats = await get_player_stats(fixture_id)
+    events       = await get_match_incidents(fixture_id)
     details["lineups"]      = lineups
-    details["player_stats"] = player_stats
+    details["player_stats"] = player_stats or {}
     details["events"]       = events
     details["played_ids"]   = lineups.get("played_ids", set())
     details["starter_ids"]  = lineups.get("starter_ids", set())
-
     return details
 
 
-# ── All fixtures for active tournaments ───────────────────────────────────────
+# ── 7. All fixtures for active tournaments ────────────────────────────────────
 
 async def get_all_tournament_fixtures(tournament_ids: list[int] = None) -> list[dict]:
+    """
+    Fetch all fixtures for given tournament IDs.
+    tournament_ids: api-football league IDs (2 for UCL, 39 for PL etc.)
+    """
     if not tournament_ids:
-        tournament_ids = [7]
+        tournament_ids = [2]  # UCL default
+
+    # Convert from SofaScore IDs if needed
+    af_ids = []
+    for tid in tournament_ids:
+        af_id = SOFASCORE_TO_AF.get(tid, tid)  # pass through if already api-football ID
+        af_ids.append(af_id)
 
     all_matches = []
-    for tid in tournament_ids:
-        matches = await get_fixtures(tid)
-        all_matches.extend(matches)
+    seen = set()
+    for af_id in af_ids:
+        matches = await get_fixtures(af_id)
+        for m in matches:
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                all_matches.append(m)
         await asyncio.sleep(0.5)
 
-    seen = set()
-    unique = []
-    for m in all_matches:
-        if m["id"] not in seen:
-            seen.add(m["id"])
-            unique.append(m)
-
-    return sorted(unique, key=lambda x: (x["date"], x.get("time", "")))
+    return sorted(all_matches, key=lambda x: (x["date"], x.get("time", "")))
 
 
 async def get_ucl_matches_today_and_yesterday(tournament_ids: list[int] = None) -> list[dict]:
