@@ -98,6 +98,12 @@ async def check_due_matches(bot=None):
 
 async def process_due_match(match_id: str, cached_match: dict, bot=None):
     """Fetch latest data and process if finished."""
+    # Double-check not already awarded (race condition guard)
+    cached = await sheets.get_cached_match(match_id)
+    if cached and cached.get("points_awarded"):
+        logger.info("Match %s already processed — skipping", match_id)
+        return
+
     # Fetch current match status
     details = await football_api.get_match_details(match_id)
     if not details:
