@@ -1153,15 +1153,17 @@ async def cmd_testlineup(message: Message, state: FSMContext):
 # ── Tournament filter ─────────────────────────────────────────────────────────
 
 # SofaScore uniqueTournament IDs
-# Confirmed IDs from /findtournament
+# api-football v3 league IDs
 KNOWN_TOURNAMENTS = {
-    "ucl":        ("Champions League",  7),
-    "pl":         ("Premier League",   17),
-    "laliga":     ("La Liga",           8),
-    "bundesliga": ("Bundesliga",       35),
-    "ligue1":     ("Ligue 1",          34),
-    "el":         ("Europa League",   679),
-    "wc":         ("World Cup",         3),
+    "ucl":        ("Champions League",   2),
+    "pl":         ("Premier League",    39),
+    "laliga":     ("La Liga",          140),
+    "bundesliga": ("Bundesliga",        78),
+    "seriea":     ("Serie A",          135),
+    "ligue1":     ("Ligue 1",           61),
+    "el":         ("Europa League",      3),
+    "ecl":        ("Conference League", 848),
+    "wc":         ("World Cup",          1),
 }
 
 
