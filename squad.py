@@ -44,7 +44,10 @@ def _needs(formation, squad):
 
 
 def _all_filled(formation, squad):
-    return all(v == 0 for v in _needs(formation, squad).values())
+    """Check using same slot names as squad_is_complete in helpers."""
+    from helpers import get_all_slots
+    slots = get_all_slots(formation)
+    return all(squad.get(s) for s in slots)
 
 
 def _assign_slot(formation, squad, pid, pos):
@@ -385,6 +388,14 @@ async def confirm_squad(callback: CallbackQuery, state: FSMContext):
 
     squad     = await sheets.get_squad(uid)
     formation = user.get("formation", "4-3-3")
+
+    # Also check FSM state in case squad not fully saved yet
+    fsm_data  = await state.get_data()
+    if fsm_data.get("squad") and _all_filled(fsm_data.get("formation", formation), fsm_data["squad"]):
+        squad     = fsm_data["squad"]
+        formation = fsm_data.get("formation", formation)
+        await sheets.save_squad(uid, dict(squad, formation=formation))
+
     if not squad or not squad_is_complete(squad, formation):
         await callback.answer(t(lang, "no_squad"), show_alert=True)
         return
