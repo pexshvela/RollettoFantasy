@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 async def main():
     from aiogram import Bot, Dispatcher
+    from aiogram.client.default import DefaultBotProperties
     from aiogram.fsm.storage.memory import MemoryStorage
     from aiogram.enums import ParseMode
 
@@ -39,7 +40,7 @@ async def main():
     pl_module.set_active_tournament(tournament)
     logger.info("Active tournament: %s", tournament.upper())
 
-    bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML)
+    bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp  = Dispatcher(storage=MemoryStorage())
 
     # Register routers — order matters
