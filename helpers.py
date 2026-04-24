@@ -107,5 +107,10 @@ def calc_squad_cost(squad: dict) -> int:
 
 
 def squad_is_complete(squad: dict, formation: str) -> bool:
-    all_slots = get_all_slots(formation)
-    return all(squad.get(s) for s in all_slots)
+    """Use squad.py slot logic — import dynamically to avoid circular import."""
+    try:
+        from squad import _slots_for_formation
+        slots = [s for s, _ in _slots_for_formation(formation)]
+    except Exception:
+        slots = get_all_slots(formation)
+    return all(squad.get(s) for s in slots)
