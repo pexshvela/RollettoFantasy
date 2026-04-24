@@ -185,9 +185,25 @@ async def award_points(match: dict, bot=None):
     logger.info("Matched %d/%d players for %s vs %s",
                 len(bot_player_stats), len(player_stats_raw) // 2, home_team, away_team)
 
-    # Get active gameweek
-    gw = await sheets.get_active_gameweek()
-    gw_id = gw["id"] if gw else 0
+    # Find gameweek by match date
+    from datetime import date as _date
+    match_date = match.get("date", "")
+    all_gws    = await sheets.get_all_gameweeks()
+    gw_id      = 0
+    for gw in all_gws:
+        if gw.get("start_date") == match_date or gw.get("end_date") == match_date:
+            gw_id = gw["id"]
+            break
+    # Fallback: use any upcoming/active gameweek
+    if not gw_id:
+        for gw in all_gws:
+            if gw.get("status") in ("upcoming", "active"):
+                gw_id = gw["id"]
+                break
+
+    if not gw_id:
+        logger.warning("No gameweek found for match on %s — cannot award points", match_date)
+        return
 
     # Award points to all confirmed squads
     users   = await sheets.get_all_users()
@@ -196,18 +212,21 @@ async def award_points(match: dict, bot=None):
     for user_row in users:
         uid = int(user_row["telegram_id"])
 
-        # Only confirmed squads
-        if not gw_id:
-            continue
         confirmation = await sheets.get_confirmation(uid, gw_id)
         if not confirmation:
             continue  # Not confirmed → 0 points
 
         squad_snapshot = confirmation.get("squad_snapshot") or {}
-        captain_id     = user_row.get("captain", "")
-        formation      = user_row.get("formation", "4-3-3")
+        if not squad_snapshot:
+            # Fallback: use current squad from DB
+            db_squad = await sheets.get_squad(uid)
+            squad_snapshot = db_squad or {}
 
-        from helpers import get_starter_slots, get_bench_slots
+        captain_id = user_row.get("captain", "")
+        formation  = user_row.get("formation", "4-3-3")
+
+        # Get starter slots using formation-aware helper
+        from helpers import get_starter_slots
         starter_slots = get_starter_slots(formation)
         user_total    = 0
 
@@ -287,8 +306,6 @@ async def check_deadline_notifications(bot=None):
     if 0 < diff <= 86400 and key_24h not in _notified_deadlines:
         from translations import t
         for u in users:
-            if u.get("confirmed"):
-                continue
             lang = u.get("language", "en")
             try:
                 await bot.send_message(
@@ -306,8 +323,6 @@ async def check_deadline_notifications(bot=None):
     if 0 < diff <= 3600 and key_1h not in _notified_deadlines:
         from translations import t
         for u in users:
-            if u.get("confirmed"):
-                continue
             lang = u.get("language", "en")
             try:
                 await bot.send_message(
