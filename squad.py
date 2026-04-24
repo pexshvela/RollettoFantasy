@@ -133,43 +133,39 @@ async def _show_position_menu(message, lang, formation, squad, edit=True):
 
     kb = InlineKeyboardBuilder()
 
-    # GK row (1 button)
-    n = needs["GK"]
-    suffix = " ✅" if n == 0 else ""
-    kb.button(text=POS_EMOJI["GK"] + " GK" + suffix, callback_data="pos_pick:GK:0")
+    # GK row — show tick if slot filled
+    gk_filled = bool(squad.get("gk1"))
+    kb.button(text=POS_EMOJI["GK"] + (" ✅" if gk_filled else " GK"),
+              callback_data="pos_pick:GK:0")
 
-    # DEF row (n_def buttons side by side)
+    # DEF row — tick each slot individually
     n_def = slots_def["DEF"]
-    n = needs["DEF"]
-    suffix = " ✅" if n == 0 else ""
-    for _ in range(n_def):
-        kb.button(text=POS_EMOJI["DEF"] + suffix, callback_data="pos_pick:DEF:0")
+    for i in range(1, n_def + 1):
+        filled = bool(squad.get("def" + str(i)))
+        kb.button(text=POS_EMOJI["DEF"] + (" ✅" if filled else ""),
+                  callback_data="pos_pick:DEF:0")
 
     # MF row
     n_mf = slots_def["MF"]
-    n = needs["MF"]
-    suffix = " ✅" if n == 0 else ""
-    for _ in range(n_mf):
-        kb.button(text=POS_EMOJI["MF"] + suffix, callback_data="pos_pick:MF:0")
+    for i in range(1, n_mf + 1):
+        filled = bool(squad.get("mf" + str(i)))
+        kb.button(text=POS_EMOJI["MF"] + (" ✅" if filled else ""),
+                  callback_data="pos_pick:MF:0")
 
     # FW row
     n_fw = slots_def["FW"]
-    n = needs["FW"]
-    suffix = " ✅" if n == 0 else ""
-    for _ in range(n_fw):
-        kb.button(text=POS_EMOJI["FW"] + suffix, callback_data="pos_pick:FW:0")
+    for i in range(1, n_fw + 1):
+        filled = bool(squad.get("fw" + str(i)))
+        kb.button(text=POS_EMOJI["FW"] + (" ✅" if filled else ""),
+                  callback_data="pos_pick:FW:0")
 
-    # Bench row (GK DEF MF FW)
-    bench_positions = ["GK", "DEF", "MF", "FW"]
-    for pos in bench_positions:
-        bench_slot = "bench_" + pos.lower()
-        filled = bool(squad.get(bench_slot))
-        label = POS_EMOJI[pos] + (" ✅" if filled else "")
-        kb.button(text=label, callback_data="pos_pick:" + pos + ":0")
+    # Bench row
+    for pos in ["GK", "DEF", "MF", "FW"]:
+        filled = bool(squad.get("bench_" + pos.lower()))
+        kb.button(text=POS_EMOJI[pos] + (" ✅" if filled else ""),
+                  callback_data="pos_pick:" + pos + ":0")
 
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
-
-    # Adjust rows to match pitch layout: 1, n_def, n_mf, n_fw, 4 bench, 1 home
     kb.adjust(1, n_def, n_mf, n_fw, 4, 1)
 
     try:
@@ -237,14 +233,41 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
     squad = await sheets.get_squad(uid)
     formation = (user or {}).get("formation", "4-3-3")
 
+    # Also check FSM state in case not yet saved to DB
+    fsm_data = await state.get_data()
+    if (not squad or not squad_is_complete(squad, formation)) and fsm_data.get("squad"):
+        fsm_squad = fsm_data["squad"]
+        fsm_form  = fsm_data.get("formation", formation)
+        if _all_filled(fsm_form, fsm_squad):
+            squad     = fsm_squad
+            formation = fsm_form
+            await sheets.save_squad(uid, dict(squad, formation=formation))
+
     if squad and squad_is_complete(squad, formation):
         captain_id = (user or {}).get("captain", "")
         pts        = await sheets.get_squad_points_summary(uid)
         visual     = build_squad_visual(squad, formation, captain_id, pts)
+        confirmed  = (user or {}).get("confirmed", False)
+
+        # Add change captain button if before deadline
+        before_dl = await sheets.is_before_deadline()
+        kb = squad_review_keyboard(lang, confirmed=confirmed)
+        if before_dl:
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            import config as _config
+            kb2 = InlineKeyboardBuilder()
+            if not confirmed:
+                kb2.button(text="✅ Confirm Squad",    callback_data="squad:confirm")
+            kb2.button(text="⭐ Change Captain",       callback_data="squad:change_captain")
+            kb2.button(text="🔄 Rebuild Squad",        callback_data="squad:change")
+            kb2.button(text=t(lang, "back_home"),      callback_data="home:back")
+            kb2.adjust(1)
+            kb = kb2.as_markup()
+
         await callback.message.edit_text(
             "📋 <b>My Squad</b>\n\n" + visual,
             parse_mode="HTML",
-            reply_markup=squad_review_keyboard(lang, confirmed=(user or {}).get("confirmed", False))
+            reply_markup=kb
         )
     else:
         await callback.message.edit_text(
@@ -345,6 +368,28 @@ async def _show_captain_picker(message, lang, squad, formation):
         await message.edit_text(txt, parse_mode="HTML", reply_markup=kb)
     except Exception:
         await message.answer(txt, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "squad:change_captain")
+async def change_captain(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "deadline_passed"), show_alert=True)
+        return
+
+    squad     = await sheets.get_squad(uid)
+    formation = (user or {}).get("formation", "4-3-3")
+    if not squad:
+        await callback.answer("No squad found.", show_alert=True)
+        return
+
+    await state.update_data(squad=squad, formation=formation)
+    await _show_captain_picker(callback.message, lang, squad, formation)
+    await state.set_state(Squad.captain)
+    await callback.answer()
 
 
 @router.callback_query(Squad.captain, F.data.startswith("captain:"))
