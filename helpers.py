@@ -107,17 +107,9 @@ def calc_squad_cost(squad: dict) -> int:
 
 
 def squad_is_complete(squad: dict, formation: str) -> bool:
-    """Check if squad has all 15 players filled."""
+    """Check if squad has 15 filled player slots."""
     if not squad:
         return False
-    try:
-        from squad import _slots_for_formation
-        slots = [s for s, _ in _slots_for_formation(formation)]
-        if all(squad.get(s) for s in slots):
-            return True
-    except Exception:
-        pass
-    # Fallback: just count non-empty player slots (15 total)
     count = sum(1 for k, v in squad.items()
-                if isinstance(v, str) and v and k != "formation")
+                if isinstance(v, str) and v and k not in ("formation", "telegram_id"))
     return count >= 15
