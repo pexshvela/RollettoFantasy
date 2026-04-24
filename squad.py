@@ -1,11 +1,5 @@
 """
-squad.py — Squad building flow:
-1. Choose formation
-2. See position buttons (GK/DEF/MF/FW) with count needed
-3. Tap a position → see players for that position
-4. Pick player → back to position menu
-5. Once all filled → pick captain
-6. Review → confirm (no captain = no confirm)
+squad.py - Squad building with pitch visual and position-based picking.
 """
 import logging
 from aiogram import Router, F
@@ -20,7 +14,7 @@ from states import Squad
 from translations import t
 from helpers import (
     get_lang, get_formation_slots, get_starter_slots,
-    get_bench_slots, build_squad_visual, calc_squad_cost,
+    build_squad_visual, calc_squad_cost,
     squad_is_complete, FORMATIONS
 )
 from inline import home_keyboard, formation_keyboard, captain_keyboard, squad_review_keyboard
@@ -32,14 +26,11 @@ router = Router()
 POS_EMOJI = {"GK": "🧤", "DEF": "🔵", "MF": "🟡", "FW": "🔴"}
 POS_NAME  = {"GK": "Goalkeeper", "DEF": "Defender", "MF": "Midfielder", "FW": "Forward"}
 
-BENCH_NEEDS = {"GK": 1, "DEF": 1, "MF": 1, "FW": 1}
 
-
-def _needs(formation: str, squad: dict) -> dict[str, int]:
-    """How many more of each position are needed."""
+def _needs(formation, squad):
     slots_def = get_formation_slots(formation)
     total = {
-        "GK":  1 + 1,  # 1 starter + 1 bench
+        "GK":  2,
         "DEF": slots_def["DEF"] + 1,
         "MF":  slots_def["MF"]  + 1,
         "FW":  slots_def["FW"]  + 1,
@@ -52,21 +43,15 @@ def _needs(formation: str, squad: dict) -> dict[str, int]:
     return total
 
 
-def _all_filled(formation: str, squad: dict) -> bool:
+def _all_filled(formation, squad):
     return all(v == 0 for v in _needs(formation, squad).values())
 
 
-def _assign_slot(formation: str, squad: dict, pid: str, pos: str) -> dict:
-    """Put player into next free slot for their position."""
+def _assign_slot(formation, squad, pid, pos):
     squad = dict(squad)
     slots_def = get_formation_slots(formation)
-
-    starter_slots = (
-        ["gk1"] if pos == "GK"
-        else [f"{pos.lower()}{i}" for i in range(1, slots_def.get(pos, 0) + 1)]
-    )
-    bench_slot = f"bench_{pos.lower()}"
-
+    starter_slots = ["gk1"] if pos == "GK" else [pos.lower() + str(i) for i in range(1, slots_def.get(pos, 0) + 1)]
+    bench_slot = "bench_" + pos.lower()
     for slot in starter_slots:
         if not squad.get(slot):
             squad[slot] = pid
@@ -76,31 +61,77 @@ def _assign_slot(formation: str, squad: dict, pid: str, pos: str) -> dict:
     return squad
 
 
-# ── Position menu ─────────────────────────────────────────────────────────────
+def _pitch_visual(formation, squad):
+    slots_def = get_formation_slots(formation)
 
-async def _show_position_menu(message, lang: str, formation: str,
-                               squad: dict, edit: bool = True):
+    def slot_name(slot):
+        pid = squad.get(slot, "")
+        if not pid:
+            return "[ ? ]"
+        p = get_player(pid)
+        if not p:
+            return "[ ? ]"
+        return p["name"].split()[-1][:8]
+
+    def row(names):
+        return "  ".join(n.center(9) for n in names)
+
+    lines = []
+
+    # GK
+    lines.append(slot_name("gk1").center(40))
+    lines.append("")
+
+    # DEF
+    def_names = [slot_name("def" + str(i)) for i in range(1, slots_def["DEF"] + 1)]
+    lines.append(row(def_names))
+    lines.append("")
+
+    # MF
+    mf_names = [slot_name("mf" + str(i)) for i in range(1, slots_def["MF"] + 1)]
+    lines.append(row(mf_names))
+    lines.append("")
+
+    # FW
+    fw_names = [slot_name("fw" + str(i)) for i in range(1, slots_def["FW"] + 1)]
+    lines.append(row(fw_names))
+    lines.append("")
+
+    # Bench
+    bench_names = [
+        slot_name("bench_gk"),
+        slot_name("bench_def"),
+        slot_name("bench_mf"),
+        slot_name("bench_fw"),
+    ]
+    lines.append("─── Bench ───")
+    lines.append(row(bench_names))
+
+    return "<code>" + "\n".join(lines) + "</code>"
+
+
+async def _show_position_menu(message, lang, formation, squad, edit=True):
     needs       = _needs(formation, squad)
     budget_used = calc_squad_cost(squad)
     budget_left = config.TOTAL_BUDGET - budget_used
     total_need  = sum(_needs(formation, {}).values())
     picked      = sum(1 for v in squad.values() if isinstance(v, str) and v)
 
+    pitch  = _pitch_visual(formation, squad)
     header = (
-        f"⚽ <b>Build Squad — {formation}</b>\n"
-        f"💰 Budget left: {fmt_price(budget_left)}\n"
-        f"👥 Players picked: {picked}/{total_need}\n\n"
-        f"Choose a position to add a player:"
+        "<b>Build Squad — " + formation + "</b>\n"
+        "💰 Budget: " + fmt_price(budget_left) + "  "
+        "👥 " + str(picked) + "/" + str(total_need) + "\n\n"
+        + pitch + "\n\n"
+        "Tap a position to add a player:"
     )
 
     kb = InlineKeyboardBuilder()
     for pos in ["GK", "DEF", "MF", "FW"]:
         n = needs[pos]
-        if n > 0:
-            label = f"{POS_EMOJI[pos]} {POS_NAME[pos]} — {n} more needed"
-        else:
-            label = f"{POS_EMOJI[pos]} {POS_NAME[pos]} ✅"
-        kb.button(text=label, callback_data=f"pos_pick:{pos}:0")
+        suffix = " — " + str(n) + " needed" if n > 0 else " ✅"
+        kb.button(text=POS_EMOJI[pos] + " " + POS_NAME[pos] + suffix,
+                  callback_data="pos_pick:" + pos + ":0")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
 
@@ -113,13 +144,9 @@ async def _show_position_menu(message, lang: str, formation: str,
         await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
 
 
-# ── Player list for a position ────────────────────────────────────────────────
-
-async def _show_position_players(message, lang: str, formation: str,
-                                  squad: dict, pos: str, page: int = 0):
+async def _show_pos_players(message, lang, formation, squad, pos, page=0):
     needs       = _needs(formation, squad)
-    budget_used = calc_squad_cost(squad)
-    budget_left = config.TOTAL_BUDGET - budget_used
+    budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
     picked_ids  = {v for v in squad.values() if isinstance(v, str) and v}
 
     if needs.get(pos, 0) <= 0:
@@ -133,30 +160,28 @@ async def _show_position_players(message, lang: str, formation: str,
     available.sort(key=lambda p: -p["price"])
 
     page_size = 8
-    start = page * page_size
-    end   = start + page_size
+    start  = page * page_size
+    end    = start + page_size
     page_p = available[start:end]
 
     header = (
-        f"{POS_EMOJI[pos]} <b>{POS_NAME[pos]}s</b> — {needs[pos]} more needed\n"
-        f"💰 Budget left: {fmt_price(budget_left)}"
+        POS_EMOJI[pos] + " <b>" + POS_NAME[pos] + "s</b> — "
+        + str(needs[pos]) + " more needed\n"
+        "💰 Budget: " + fmt_price(budget_left)
     )
 
     kb = InlineKeyboardBuilder()
     for p in page_p:
-        label = f"{p['name']} ({p['team']}) — {fmt_price(p['price'])}"
-        kb.button(text=label, callback_data=f"pick:{pos}:{p['id']}")
+        label = p["name"] + " (" + p["team"] + ") — " + fmt_price(p["price"])
+        kb.button(text=label, callback_data="pick:" + pos + ":" + p["id"])
 
-    nav = []
     if page > 0:
-        nav.append(("◀️ Prev", f"pos_pick:{pos}:{page-1}"))
+        kb.button(text="◀️ Prev", callback_data="pos_pick:" + pos + ":" + str(page - 1))
     if end < len(available):
-        nav.append(("Next ▶️", f"pos_pick:{pos}:{page+1}"))
-    for lbl, cb in nav:
-        kb.button(text=lbl, callback_data=cb)
+        kb.button(text="Next ▶️", callback_data="pos_pick:" + pos + ":" + str(page + 1))
 
-    kb.button(text="◀️ Back to positions", callback_data="squad:positions")
-    kb.button(text=t(lang, "back_home"),    callback_data="home:back")
+    kb.button(text="◀️ Positions", callback_data="squad:positions")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
 
     try:
@@ -165,7 +190,7 @@ async def _show_position_players(message, lang: str, formation: str,
         await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
 
 
-# ── Entry points ──────────────────────────────────────────────────────────────
+# ── Handlers ──────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "home:squad")
 async def show_squad(callback: CallbackQuery, state: FSMContext):
@@ -180,14 +205,13 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
         pts        = await sheets.get_squad_points_summary(uid)
         visual     = build_squad_visual(squad, formation, captain_id, pts)
         await callback.message.edit_text(
-            f"📋 <b>My Squad</b>\n\n{visual}",
+            "📋 <b>My Squad</b>\n\n" + visual,
             parse_mode="HTML",
             reply_markup=squad_review_keyboard(lang, confirmed=(user or {}).get("confirmed", False))
         )
     else:
         await callback.message.edit_text(
-            t(lang, "build_squad"),
-            parse_mode="HTML",
+            t(lang, "build_squad"), parse_mode="HTML",
             reply_markup=formation_keyboard(lang)
         )
         await state.set_state(Squad.formation)
@@ -221,22 +245,23 @@ async def back_to_positions(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("pos_pick:"))
-async def show_pos_players(callback: CallbackQuery, state: FSMContext):
-    _, pos, page_str = callback.data.split(":")
-    page = int(page_str)
+async def show_pos_players_cb(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    pos, page = parts[1], int(parts[2])
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
     data = await state.get_data()
-    await _show_position_players(callback.message, lang,
-                                  data.get("formation", "4-3-3"),
-                                  data.get("squad", {}), pos, page)
+    await _show_pos_players(callback.message, lang,
+                             data.get("formation", "4-3-3"),
+                             data.get("squad", {}), pos, page)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("pick:"))
 async def pick_player(callback: CallbackQuery, state: FSMContext):
-    _, pos, pid = callback.data.split(":")
+    parts = callback.data.split(":")
+    pos, pid = parts[1], parts[2]
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
@@ -247,7 +272,7 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     needs     = _needs(formation, squad)
 
     if needs.get(pos, 0) <= 0:
-        await callback.answer(f"You don't need more {POS_NAME.get(pos, pos)}s.", show_alert=True)
+        await callback.answer("You don't need more " + POS_NAME.get(pos, pos) + "s.", show_alert=True)
         return
 
     p = get_player(pid)
@@ -255,8 +280,7 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Player not found.", show_alert=True)
         return
 
-    budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
-    if p["price"] > budget_left:
+    if calc_squad_cost(squad) + p["price"] > config.TOTAL_BUDGET:
         await callback.answer(t(lang, "over_budget"), show_alert=True)
         return
 
@@ -264,7 +288,7 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     await state.update_data(squad=squad)
 
     if _all_filled(formation, squad):
-        await sheets.save_squad(uid, {**squad, "formation": formation})
+        await sheets.save_squad(uid, dict(squad, formation=formation))
         await _show_captain_picker(callback.message, lang, squad, formation)
         await state.set_state(Squad.captain)
     else:
@@ -273,20 +297,17 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ── Captain ───────────────────────────────────────────────────────────────────
-
-async def _show_captain_picker(message, lang: str, squad: dict, formation: str):
+async def _show_captain_picker(message, lang, squad, formation):
     kb = captain_keyboard(squad, formation, lang)
+    txt = (
+        "⭐ <b>Choose your captain</b>\n\n"
+        "Captain scores ×2 points.\n"
+        "You cannot confirm without a captain."
+    )
     try:
-        await message.edit_text(
-            "⭐ <b>Choose your captain</b>\n\nCaptain scores ×2 points.\nYou cannot confirm without a captain.",
-            parse_mode="HTML", reply_markup=kb
-        )
+        await message.edit_text(txt, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        await message.answer(
-            "⭐ <b>Choose your captain</b>\n\nCaptain scores ×2 points.\nYou cannot confirm without a captain.",
-            parse_mode="HTML", reply_markup=kb
-        )
+        await message.answer(txt, parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(Squad.captain, F.data.startswith("captain:"))
@@ -302,19 +323,18 @@ async def pick_captain(callback: CallbackQuery, state: FSMContext):
     p         = get_player(pid)
 
     await sheets.update_user(uid, captain=pid)
-    await sheets.save_squad(uid, {**squad, "formation": formation})
+    await sheets.save_squad(uid, dict(squad, formation=formation))
 
     visual = build_squad_visual(squad, formation, pid)
+    cap_name = p["name"] if p else pid
     await callback.message.edit_text(
-        f"⭐ Captain: <b>{p['name'] if p else pid}</b>\n\n📋 <b>Squad Review</b>\n\n{visual}",
+        "⭐ Captain: <b>" + cap_name + "</b>\n\n📋 <b>Squad Review</b>\n\n" + visual,
         parse_mode="HTML",
         reply_markup=squad_review_keyboard(lang, confirmed=False)
     )
     await state.set_state(Squad.review)
     await callback.answer()
 
-
-# ── Confirm / Change ──────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "squad:confirm")
 async def confirm_squad(callback: CallbackQuery, state: FSMContext):
@@ -343,8 +363,7 @@ async def confirm_squad(callback: CallbackQuery, state: FSMContext):
     await sheets.confirm_squad(uid, gw["id"], squad)
     import config as _config
     await callback.message.edit_text(
-        t(lang, "squad_confirmed"),
-        parse_mode="HTML",
+        t(lang, "squad_confirmed"), parse_mode="HTML",
         reply_markup=home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
     )
     await state.clear()
@@ -362,8 +381,7 @@ async def change_squad(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.message.edit_text(
-        t(lang, "build_squad"),
-        parse_mode="HTML",
+        t(lang, "build_squad"), parse_mode="HTML",
         reply_markup=formation_keyboard(lang)
     )
     await state.set_state(Squad.formation)
@@ -400,8 +418,7 @@ async def home_confirm(callback: CallbackQuery, state: FSMContext):
     await sheets.confirm_squad(uid, gw["id"], squad)
     import config as _config
     await callback.message.edit_text(
-        t(lang, "squad_confirmed"),
-        parse_mode="HTML",
+        t(lang, "squad_confirmed"), parse_mode="HTML",
         reply_markup=home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
     )
     await callback.answer()
