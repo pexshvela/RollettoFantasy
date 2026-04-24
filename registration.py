@@ -111,13 +111,29 @@ async def go_home(callback: CallbackQuery, state: FSMContext):
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     if not user:
-        await callback.message.edit_text("Please use /start to register. Send /start to begin.")
+        await callback.message.edit_text("Please use /start to register.")
         await callback.answer()
         return
     lang = user.get("language", "en")
-    tournament = await sheets.get_tournament()
-    pl_module.set_active_tournament(tournament)
-    await _edit_home(callback.message, user, lang)
+    try:
+        tournament = await sheets.get_tournament()
+        pl_module.set_active_tournament(tournament)
+    except Exception:
+        pass
+    try:
+        await _edit_home(callback.message, user, lang)
+    except Exception as e:
+        # Fallback: send fresh home message
+        import logging
+        logging.getLogger(__name__).error("go_home edit failed: %s", e)
+        try:
+            text = await _home_text(user, lang)
+            import config as _config
+            from inline import home_keyboard
+            await callback.message.answer(text, parse_mode="HTML",
+                reply_markup=home_keyboard(lang, is_admin=uid == _config.ADMIN_ID))
+        except Exception:
+            pass
     await callback.answer()
 
 
