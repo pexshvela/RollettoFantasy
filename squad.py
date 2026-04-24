@@ -25,20 +25,29 @@ router = Router()
 POS_EMOJI = {"GK": "🧤", "DEF": "🔵", "MF": "🟡", "FW": "🔴"}
 
 # Fixed 15 slots always — matches Supabase columns
-# Slot names MUST match Supabase squads table columns exactly
-# Formation starters: gk1, def1..N, mf1..N, fw1..N
-# Bench: bench_gk, bench_def, bench_mf, bench_fw (always 4)
-# Total: 15 (varies by formation for starters, always 4 bench)
+# Slot names match Supabase squads table columns
+# Starters: gk1, def1..N, mf1..N, fw1..N (per formation)
+# Bench: bench_gk + enough DEF/MF/FW to reach 2GK 5DEF 5MF 3FW = 15 total
 def _all_slots_for(formation: str) -> list[tuple[str,str]]:
     d = get_formation_slots(formation)
     slots = [("gk1", "GK")]
     for i in range(1, d["DEF"]+1): slots.append((f"def{i}", "DEF"))
     for i in range(1, d["MF"]+1):  slots.append((f"mf{i}",  "MF"))
     for i in range(1, d["FW"]+1):  slots.append((f"fw{i}",  "FW"))
-    slots.append(("bench_gk",  "GK"))
-    slots.append(("bench_def", "DEF"))
-    slots.append(("bench_mf",  "MF"))
-    slots.append(("bench_fw",  "FW"))
+    # Bench: always 1 GK, then fill remaining to reach 5DEF 5MF 3FW
+    slots.append(("bench_gk", "GK"))
+    bench_def = 5 - d["DEF"]
+    bench_mf  = 5 - d["MF"]
+    bench_fw  = 3 - d["FW"]
+    for i in range(1, bench_def+1):
+        key = "bench_def" if i == 1 else f"bench_def{i}"
+        slots.append((key, "DEF"))
+    for i in range(1, bench_mf+1):
+        key = "bench_mf" if i == 1 else f"bench_mf{i}"
+        slots.append((key, "MF"))
+    for i in range(1, bench_fw+1):
+        key = "bench_fw" if i == 1 else f"bench_fw{i}"
+        slots.append((key, "FW"))
     return slots
 
 
