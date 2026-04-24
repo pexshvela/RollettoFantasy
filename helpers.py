@@ -107,10 +107,17 @@ def calc_squad_cost(squad: dict) -> int:
 
 
 def squad_is_complete(squad: dict, formation: str) -> bool:
-    """Use squad.py slot logic — import dynamically to avoid circular import."""
+    """Check if squad has all 15 players filled."""
+    if not squad:
+        return False
     try:
         from squad import _slots_for_formation
         slots = [s for s, _ in _slots_for_formation(formation)]
+        if all(squad.get(s) for s in slots):
+            return True
     except Exception:
-        slots = get_all_slots(formation)
-    return all(squad.get(s) for s in slots)
+        pass
+    # Fallback: just count non-empty player slots (15 total)
+    count = sum(1 for k, v in squad.items()
+                if isinstance(v, str) and v and k != "formation")
+    return count >= 15
