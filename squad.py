@@ -51,21 +51,15 @@ def _all_filled(formation, squad):
 
 
 def _assign_slot(formation, squad, pid, pos):
-    """Fill next empty slot. If all slots full, replace the bench slot (last picked)."""
+    """Fill the next empty slot for this position."""
     squad = dict(squad)
     slots_def = get_formation_slots(formation)
     starter_slots = ["gk1"] if pos == "GK" else [pos.lower() + str(i) for i in range(1, slots_def.get(pos, 0) + 1)]
     bench_slot = "bench_" + pos.lower()
-    all_slots  = starter_slots + [bench_slot]
-
-    # Fill first empty slot
-    for slot in all_slots:
+    for slot in starter_slots + [bench_slot]:
         if not squad.get(slot):
             squad[slot] = pid
             return squad
-
-    # All slots filled — replace bench slot (allow budget adjustment)
-    squad[bench_slot] = pid
     return squad
 
 
@@ -138,37 +132,47 @@ async def _show_position_menu(message, lang, formation, squad, edit=True):
 
     kb = InlineKeyboardBuilder()
 
-    # GK row — show tick if slot filled
-    gk_filled = bool(squad.get("gk1"))
-    kb.button(text=POS_EMOJI["GK"] + (" ✅" if gk_filled else " GK"),
-              callback_data="pos_pick:GK:0")
-
-    # DEF row — tick each slot individually
+    # GK row
     n_def = slots_def["DEF"]
+    n_mf  = slots_def["MF"]
+    n_fw  = slots_def["FW"]
+
+    gk_pid = squad.get("gk1", "")
+    gk_p   = get_player(gk_pid) if gk_pid else None
+    gk_lbl = (gk_p["name"].split()[-1][:10] if gk_p else "GK ?")
+    kb.button(text=POS_EMOJI["GK"] + " " + gk_lbl, callback_data="slot_pick:gk1:GK:0")
+
+    # DEF row — one button per slot
     for i in range(1, n_def + 1):
-        filled = bool(squad.get("def" + str(i)))
-        kb.button(text=POS_EMOJI["DEF"] + (" ✅" if filled else ""),
-                  callback_data="pos_pick:DEF:0")
+        slot = "def" + str(i)
+        pid  = squad.get(slot, "")
+        p    = get_player(pid) if pid else None
+        lbl  = (p["name"].split()[-1][:8] if p else "DEF ?")
+        kb.button(text=POS_EMOJI["DEF"] + " " + lbl, callback_data="slot_pick:" + slot + ":DEF:0")
 
     # MF row
-    n_mf = slots_def["MF"]
     for i in range(1, n_mf + 1):
-        filled = bool(squad.get("mf" + str(i)))
-        kb.button(text=POS_EMOJI["MF"] + (" ✅" if filled else ""),
-                  callback_data="pos_pick:MF:0")
+        slot = "mf" + str(i)
+        pid  = squad.get(slot, "")
+        p    = get_player(pid) if pid else None
+        lbl  = (p["name"].split()[-1][:8] if p else "MF ?")
+        kb.button(text=POS_EMOJI["MF"] + " " + lbl, callback_data="slot_pick:" + slot + ":MF:0")
 
     # FW row
-    n_fw = slots_def["FW"]
     for i in range(1, n_fw + 1):
-        filled = bool(squad.get("fw" + str(i)))
-        kb.button(text=POS_EMOJI["FW"] + (" ✅" if filled else ""),
-                  callback_data="pos_pick:FW:0")
+        slot = "fw" + str(i)
+        pid  = squad.get(slot, "")
+        p    = get_player(pid) if pid else None
+        lbl  = (p["name"].split()[-1][:8] if p else "FW ?")
+        kb.button(text=POS_EMOJI["FW"] + " " + lbl, callback_data="slot_pick:" + slot + ":FW:0")
 
     # Bench row
     for pos in ["GK", "DEF", "MF", "FW"]:
-        filled = bool(squad.get("bench_" + pos.lower()))
-        kb.button(text=POS_EMOJI[pos] + (" ✅" if filled else ""),
-                  callback_data="pos_pick:" + pos + ":0")
+        slot = "bench_" + pos.lower()
+        pid  = squad.get(slot, "")
+        p    = get_player(pid) if pid else None
+        lbl  = (p["name"].split()[-1][:8] if p else pos + " ?")
+        kb.button(text=POS_EMOJI[pos] + " " + lbl, callback_data="slot_pick:" + slot + ":" + pos + ":0")
 
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1, n_def, n_mf, n_fw, 4, 1)
@@ -182,23 +186,18 @@ async def _show_position_menu(message, lang, formation, squad, edit=True):
         await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
 
 
-async def _show_pos_players(message, lang, formation, squad, pos, page=0):
-    needs       = _needs(formation, squad)
+async def _show_pos_players(message, lang, formation, squad, pos, page=0, slot=None):
+    """Show players for a position. slot = specific slot being replaced (if any)."""
     budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
-    picked_ids  = {v for v in squad.values() if isinstance(v, str) and v}
-    # Always show players — even if position is full, user can replace to adjust budget
 
-    # When replacing (position full), calculate budget with refund of bench slot
-    needs = _needs(formation, squad)
-    if needs.get(pos, 0) <= 0:
-        slots_def = get_formation_slots(formation)
-        bench_slot = "bench_" + pos.lower()
-        old_pid = squad.get(bench_slot, "")
-        old_p   = get_player(old_pid) if old_pid else None
-        refund  = old_p["price"] if old_p else 0
-        effective_budget = budget_left + refund
-    else:
-        effective_budget = budget_left
+    # Refund the current player in this slot so budget is accurate
+    current_pid = squad.get(slot, "") if slot else ""
+    current_p   = get_player(current_pid) if current_pid else None
+    refund      = current_p["price"] if current_p else 0
+    effective_budget = budget_left + refund
+
+    # Exclude all picked players except the one in this slot (can swap with same slot)
+    picked_ids = {v for k, v in squad.items() if isinstance(v, str) and v and k != slot}
 
     available = [
         p for p in get_players_by_position(pos)
@@ -211,21 +210,23 @@ async def _show_pos_players(message, lang, formation, squad, pos, page=0):
     end    = start + page_size
     page_p = available[start:end]
 
+    replacing = " (replacing)" if current_p else ""
+    slot_key  = slot or pos
     header = (
-        POS_EMOJI[pos] + " <b>" + POS_NAME[pos] + "s</b> — "
-        + str(needs[pos]) + " more needed\n"
-        "💰 Budget: " + fmt_price(budget_left)
+        POS_EMOJI[pos] + " <b>" + POS_NAME[pos] + "s</b>" + replacing + "\n"
+        + "💰 Budget: " + fmt_price(effective_budget)
+        + (" (+refund)" if refund else "")
     )
 
     kb = InlineKeyboardBuilder()
     for p in page_p:
         label = p["name"] + " (" + p["team"] + ") — " + fmt_price(p["price"])
-        kb.button(text=label, callback_data="pick:" + pos + ":" + p["id"])
+        kb.button(text=label, callback_data="slot_pick_confirm:" + slot_key + ":" + pos + ":" + p["id"])
 
     if page > 0:
-        kb.button(text="◀️ Prev", callback_data="pos_pick:" + pos + ":" + str(page - 1))
+        kb.button(text="◀️ Prev", callback_data="slot_pick:" + slot_key + ":" + pos + ":" + str(page - 1))
     if end < len(available):
-        kb.button(text="Next ▶️", callback_data="pos_pick:" + pos + ":" + str(page + 1))
+        kb.button(text="Next ▶️", callback_data="slot_pick:" + slot_key + ":" + pos + ":" + str(page + 1))
 
     kb.button(text="◀️ Positions", callback_data="squad:positions")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
@@ -323,64 +324,67 @@ async def back_to_positions(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("pos_pick:"))
-async def show_pos_players_cb(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("slot_pick:"))
+async def slot_pick_cb(callback: CallbackQuery, state: FSMContext):
+    """Show player list for a specific slot. Format: slot_pick:SLOT:POS:PAGE"""
     parts = callback.data.split(":")
-    pos, page = parts[1], int(parts[2])
+    slot, pos, page = parts[1], parts[2], int(parts[3])
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
     data = await state.get_data()
+    squad = data.get("squad", {})
+
+    # If squad not in state, load from DB
+    if not squad:
+        db_squad = await sheets.get_squad(uid)
+        if db_squad:
+            squad = db_squad
+            formation = (user or {}).get("formation", "4-3-3")
+            await state.update_data(squad=squad, formation=formation)
+
     await _show_pos_players(callback.message, lang,
-                             data.get("formation", "4-3-3"),
-                             data.get("squad", {}), pos, page)
+                             data.get("formation", (user or {}).get("formation", "4-3-3")),
+                             squad, pos, page, slot=slot)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("pick:"))
-async def pick_player(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":")
-    pos, pid = parts[1], parts[2]
+@router.callback_query(F.data.startswith("slot_pick_confirm:"))
+async def slot_pick_confirm(callback: CallbackQuery, state: FSMContext):
+    """User picked a player for a specific slot. Format: slot_pick_confirm:SLOT:POS:PID"""
+    parts     = callback.data.split(":")
+    slot, pos, pid = parts[1], parts[2], parts[3]
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
     data = await state.get_data()
 
-    formation = data.get("formation", "4-3-3")
+    formation = data.get("formation", (user or {}).get("formation", "4-3-3"))
     squad     = dict(data.get("squad", {}))
-    needs     = _needs(formation, squad)
+
+    # Load from DB if state is empty
+    if not squad:
+        db_squad = await sheets.get_squad(uid)
+        if db_squad:
+            squad = db_squad
 
     p = get_player(pid)
     if not p:
         await callback.answer("Player not found.", show_alert=True)
         return
 
-    # If replacing an existing player, refund their price first
-    needs = _needs(formation, squad)
-    replacing = needs.get(pos, 0) <= 0  # position already full = replacing
+    # Budget check — refund current slot player
+    current_pid = squad.get(slot, "")
+    current_p   = get_player(current_pid) if current_pid else None
+    refund      = current_p["price"] if current_p else 0
+    new_cost    = calc_squad_cost(squad) - refund + p["price"]
 
-    if replacing:
-        # Find which slot will be replaced (bench slot)
-        slots_def = get_formation_slots(formation)
-        starter_slots = ["gk1"] if pos == "GK" else [pos.lower() + str(i) for i in range(1, slots_def.get(pos, 0) + 1)]
-        bench_slot = "bench_" + pos.lower()
-        all_slots  = starter_slots + [bench_slot]
-        # Find first filled slot to get the outgoing player price
-        outgoing_price = 0
-        for slot in all_slots:
-            if squad.get(slot):
-                old_p = get_player(squad[slot])
-                if old_p:
-                    outgoing_price = old_p["price"]
-        effective_cost = calc_squad_cost(squad) - outgoing_price + p["price"]
-    else:
-        effective_cost = calc_squad_cost(squad) + p["price"]
-
-    if effective_cost > config.TOTAL_BUDGET:
+    if new_cost > config.TOTAL_BUDGET:
         await callback.answer(t(lang, "over_budget"), show_alert=True)
         return
 
-    squad = _assign_slot(formation, squad, pid, pos)
+    # Place player in exact slot
+    squad[slot] = pid
     await state.update_data(squad=squad)
 
     if _all_filled(formation, squad):
