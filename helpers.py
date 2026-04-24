@@ -1,94 +1,111 @@
-import config
-from players import get_player, fmt_price
+"""helpers.py — Shared utility functions."""
+import logging
+from typing import Optional
+import sheets
+import players as pl_module
+from translations import t
+from players import fmt_price, mask_username
+
+logger = logging.getLogger(__name__)
+
+FORMATIONS = {
+    "4-3-3": {"DEF": 4, "MF": 3, "FW": 3},
+    "4-4-2": {"DEF": 4, "MF": 4, "FW": 2},
+    "3-4-3": {"DEF": 3, "MF": 4, "FW": 3},
+    "3-5-2": {"DEF": 3, "MF": 5, "FW": 2},
+    "5-3-2": {"DEF": 5, "MF": 3, "FW": 2},
+    "4-5-1": {"DEF": 4, "MF": 5, "FW": 1},
+}
+
+POS_EMOJI = {"GK": "🧤", "DEF": "🔵", "MF": "🟡", "FW": "🔴"}
+POS_NAME  = {"GK": "Goalkeeper", "DEF": "Defender", "MF": "Midfielder", "FW": "Forward"}
 
 
-async def get_lang(telegram_id: int, user: dict | None) -> str:
-    """Return user's language or default to English."""
-    if user:
-        return user.get("language", "en") or "en"
-    return "en"
+async def get_lang(telegram_id: int, user: dict = None) -> str:
+    if user is None:
+        user = await sheets.get_user(telegram_id)
+    return (user or {}).get("language", "en")
 
 
-def build_home_text(lang: str, user: dict | None, squad: dict | None) -> str:
-    from translations import t
-    budget = int(user.get("budget_remaining", config.TOTAL_BUDGET) if user else config.TOTAL_BUDGET)
-    formation = user.get("formation", "") if user else ""
-    captain_id = user.get("captain", "") if user else ""
-    points = user.get("total_points", 0) if user else 0
-    submitted = (user.get("squad_submitted", "no") == "yes") if user else False
-
-    if captain_id:
-        cap = get_player(captain_id)
-        captain_name = cap["name"] if cap else "N/A"
-    else:
-        captain_name = "Not set"
-
-    filled = count_squad_filled(squad, formation) if squad and formation else 0
-
-    return t(lang, "home_title",
-             budget=fmt_price(budget),
-             filled=filled,
-             captain=captain_name,
-             points=points)
+def get_formation_slots(formation: str) -> dict[str, int]:
+    return FORMATIONS.get(formation, FORMATIONS["4-3-3"])
 
 
-def build_squad_visual(formation: str, squad: dict) -> str:
-    """Build a text-based formation visual."""
-    if not formation:
-        return ""
+def get_starter_slots(formation: str) -> list[str]:
+    """Return ordered list of starter slot names for a formation."""
+    slots_def = get_formation_slots(formation)
+    slots = ["gk1"]
+    for i in range(1, slots_def["DEF"] + 1): slots.append(f"def{i}")
+    for i in range(1, slots_def["MF"] + 1):  slots.append(f"mf{i}")
+    for i in range(1, slots_def["FW"] + 1):  slots.append(f"fw{i}")
+    return slots
 
-    parts = formation.split("-")
-    n_def, n_mid, n_fwd = int(parts[0]), int(parts[1]), int(parts[2])
 
-    def slot_label(key: str, emoji: str) -> str:
-        pid = squad.get(key)
-        if pid:
-            p = get_player(pid)
-            cap_mark = " ⭐" if squad.get("captain") == pid else ""
-            return f"{emoji}{p['name']}{cap_mark}" if p else f"{emoji}?"
-        return f"➕"
+def get_bench_slots() -> list[str]:
+    return ["bench_gk", "bench_def", "bench_mf", "bench_fw"]
+
+
+def get_all_slots(formation: str) -> list[str]:
+    return get_starter_slots(formation) + get_bench_slots()
+
+
+def slot_to_position(slot: str) -> str:
+    """Convert slot name to position: gk1→GK, def3→DEF etc."""
+    if slot.startswith("gk") or slot == "bench_gk":    return "GK"
+    if slot.startswith("def") or slot == "bench_def":  return "DEF"
+    if slot.startswith("mf") or slot == "bench_mf":    return "MF"
+    if slot.startswith("fw") or slot == "bench_fw":    return "FW"
+    return "FW"
+
+
+def build_squad_visual(squad: dict, formation: str, captain_id: str = "",
+                        points_summary: dict = None) -> str:
+    """Build text representation of squad for display."""
+    if not squad:
+        return "No squad yet."
 
     lines = []
+    starter_slots = get_starter_slots(formation)
+    bench_slots   = get_bench_slots()
 
-    # Forwards
-    fwd_slots = [slot_label(f"fw{i}", "🔴") for i in range(1, n_fwd + 1)]
-    lines.append("  ".join(fwd_slots))
+    def player_line(slot: str) -> str:
+        pid = squad.get(slot, "")
+        if not pid:
+            pos = slot_to_position(slot)
+            return f"{POS_EMOJI.get(pos,'⚪')} <i>Empty</i>"
+        p = pl_module.get_player(pid)
+        if not p:
+            return f"⚪ Unknown"
+        cap  = " ⭐" if pid == captain_id else ""
+        pts  = f" ({points_summary[pid]}pts)" if points_summary and pid in points_summary else ""
+        return f"{POS_EMOJI.get(p['position'],'⚪')} {p['name']}{cap}{pts} — {fmt_price(p['price'])}"
 
-    # Midfielders
-    mid_slots = [slot_label(f"mf{i}", "🟡") for i in range(1, n_mid + 1)]
-    lines.append("  ".join(mid_slots))
+    lines.append(f"<b>Formation: {formation}</b>")
+    lines.append("")
 
-    # Defenders
-    def_slots = [slot_label(f"def{i}", "🔵") for i in range(1, n_def + 1)]
-    lines.append("  ".join(def_slots))
+    # Starters
+    lines.append("<b>Starting XI:</b>")
+    for slot in starter_slots:
+        lines.append(player_line(slot))
 
-    # GK
-    lines.append(slot_label("gk1", "🧤"))
+    lines.append("")
+    lines.append("<b>Bench:</b>")
+    for slot in bench_slots:
+        lines.append(player_line(slot))
 
-    # Subs
-    sub_slots = []
-    for i in range(1, 5):
-        pid = squad.get(f"sub{i}")
-        if pid:
-            p = get_player(pid)
-            sub_slots.append(p["name"] if p else "?")
-        else:
-            sub_slots.append("Empty")
-    lines.append("📋 Subs: " + " | ".join(sub_slots))
-
-    return "\n\n".join(lines)
+    return "\n".join(lines)
 
 
-def count_squad_filled(squad: dict | None, formation: str) -> int:
-    if not squad or not formation:
-        return 0
-    parts = formation.split("-")
-    n_def, n_mid, n_fwd = int(parts[0]), int(parts[1]), int(parts[2])
-    slots = (
-        ["gk1"]
-        + [f"def{i}" for i in range(1, n_def + 1)]
-        + [f"mf{i}"  for i in range(1, n_mid + 1)]
-        + [f"fw{i}"  for i in range(1, n_fwd + 1)]
-        + [f"sub{i}" for i in range(1, 5)]
-    )
-    return sum(1 for s in slots if squad.get(s))
+def calc_squad_cost(squad: dict) -> int:
+    total = 0
+    for pid in squad.values():
+        if isinstance(pid, str) and pid:
+            p = pl_module.get_player(pid)
+            if p:
+                total += p["price"]
+    return total
+
+
+def squad_is_complete(squad: dict, formation: str) -> bool:
+    all_slots = get_all_slots(formation)
+    return all(squad.get(s) for s in all_slots)

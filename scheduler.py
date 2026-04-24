@@ -1,30 +1,27 @@
 """
-scheduler.py — Smart scheduler based on kickoff times.
-
-Flow:
-  - /fixtures command fetches all matches and saves to match_cache with kickoff_timestamp
-  - Scheduler runs every 5 min but only calls API when:
-      * A match's kickoff_timestamp + 105 min (avg match duration) has passed
-      * AND match is not yet processed (points_awarded = False)
-  - This means 0 API calls on non-match days
-  - After kickoff+105min: fetch stats → if not finished yet, retry in 20 min
+scheduler.py — Background tasks:
+1. Check matches due for processing (kickoff + 100 min)
+2. Award points to confirmed squads only
+3. Send notifications (deadlines, results)
+4. Auto-detect gameweeks from fixtures
 """
 import asyncio
 import logging
 import time
 import unicodedata
+from datetime import datetime, timezone, timedelta
 
 import sheets
 import football_api
-from points_calculator import calc_player_points, build_breakdown
-from players import ALL_PLAYERS, get_player_by_espn_name
+from players import get_all_players, find_player_by_name, get_player
+from points_calculator import calc_points, build_breakdown
+import config
 
 logger = logging.getLogger(__name__)
 
-AVG_MATCH_DURATION = 100 * 60   # 100 min — first check (90 + ~10 min buffer)
-RETRY_INTERVAL     = 15 * 60    # retry every 15 min if not finished yet
-MAX_WAIT           = 60 * 60    # give up after 60 min of retries (AET/penalties edge case)
-POLL_INTERVAL      = 5 * 60     # scheduler loop every 5 min
+POLL_INTERVAL    = config.SCHEDULER_POLL_MINUTES * 60
+MATCH_DUE_MIN    = config.MATCH_DUE_MINUTES * 60
+RETRY_MIN        = config.MATCH_RETRY_MINUTES * 60
 
 _processing: set[str] = set()
 
@@ -34,49 +31,39 @@ def _norm(s: str) -> str:
 
 
 async def run_scheduler(bot=None):
-    logger.info("Scheduler started — checking every %d min.", POLL_INTERVAL // 60)
+    logger.info("Scheduler started.")
     while True:
         try:
             await check_due_matches(bot)
-            await asyncio.sleep(POLL_INTERVAL)
-        except asyncio.CancelledError:
-            break
+            await check_deadline_notifications(bot)
+            await check_transfer_window_notifications(bot)
         except Exception as e:
             logger.error("Scheduler error: %s", e)
-            await asyncio.sleep(60)
+        await asyncio.sleep(POLL_INTERVAL)
 
+
+# ── Match processing ──────────────────────────────────────────────────────────
 
 async def check_due_matches(bot=None):
-    """
-    Check match_cache for matches that should now be finished.
-    Only processes matches where kickoff_timestamp is set AND past due.
-    Matches with no kickoff_timestamp are skipped (need /fixtures first).
-    """
-    now = int(time.time())
-
-    unprocessed = await sheets.get_unprocessed_matches()
-    if not unprocessed:
+    now     = int(time.time())
+    matches = await sheets.get_unprocessed_matches()
+    if not matches:
         return
 
-    for match in unprocessed:
-        mid          = match.get("match_id") or match.get("id", "")
-        kickoff_ts   = int(match.get("kickoff_timestamp") or 0)
-        last_checked = int(match.get("last_checked") or 0)
+    for m in matches:
+        mid          = m.get("match_id", "")
+        kickoff_ts   = int(m.get("kickoff_timestamp") or 0)
+        last_checked = int(m.get("last_checked") or 0)
 
-        if not mid:
-            continue
-
-        # Skip matches with no kickoff time — these are stale cache entries
-        # Run /fixtures to refresh them with proper kickoff times
-        if not kickoff_ts:
+        if not mid or not kickoff_ts:
             continue
 
         # Not due yet
-        if now < kickoff_ts + AVG_MATCH_DURATION:
+        if now < kickoff_ts + MATCH_DUE_MIN:
             continue
 
         # Skip if checked recently
-        if last_checked and now - last_checked < RETRY_INTERVAL:
+        if last_checked and now - last_checked < RETRY_MIN:
             continue
 
         if mid in _processing:
@@ -84,122 +71,107 @@ async def check_due_matches(bot=None):
 
         _processing.add(mid)
         try:
-            logger.info("Checking match %s (%s vs %s)",
-                        mid, match.get("home_team"), match.get("away_team"))
-            await sheets.update_match_last_checked(mid)
-            await process_due_match(mid, match, bot)
+            await process_match(mid, m, bot)
         except Exception as e:
             logger.error("Error processing match %s: %s", mid, e)
         finally:
             _processing.discard(mid)
 
-        await asyncio.sleep(2)  # small delay between matches
+        await asyncio.sleep(2)
 
 
-async def process_due_match(match_id: str, cached_match: dict, bot=None):
-    """Fetch latest data and process if finished."""
-    # Double-check not already awarded (race condition guard)
-    cached = await sheets.get_cached_match(match_id)
-    if cached and cached.get("points_awarded"):
-        logger.info("Match %s already processed — skipping", match_id)
-        return
+async def process_match(match_id: str, cached: dict, bot=None):
+    """Fetch match result and award points if finished."""
+    await sheets.update_match_last_checked(match_id)
 
-    # Fetch current match status
     details = await football_api.get_match_details(match_id)
     if not details:
-        logger.warning("Could not fetch details for %s", match_id)
+        logger.warning("Could not fetch match %s", match_id)
         return
 
     if details["status"] != "final":
-        logger.info("Match %s still %s — will retry in %d min",
-                    match_id, details["status"], RETRY_INTERVAL // 60)
+        logger.info("Match %s still %s — retry in %d min",
+                    match_id, details["status"], config.MATCH_RETRY_MINUTES)
         return
 
-    # Match is finished — fetch full data
+    logger.info("Match finished: %s vs %s", details["home_team"], details["away_team"])
+
+    # Fetch full data
     full = await football_api.fetch_full_match(match_id)
     if not full:
         return
 
-    # Update cache with final score and stats
     await sheets.save_match_cache(full)
 
     if not full.get("player_stats"):
-        logger.warning("No player stats for %s", match_id)
+        logger.warning("No player stats for %s — broadcasting result only", match_id)
         if bot:
-            await _broadcast(bot, full, points_awarded=False)
+            await broadcast_result(bot, full)
         return
 
     await award_points(full, bot)
 
 
 async def award_points(match: dict, bot=None):
-    """Calculate and save fantasy points for all users."""
-    mid          = match.get("id") or match.get("match_id", "")
-    home_team    = match["home_team"]
-    away_team    = match["away_team"]
-    home_score   = match.get("home_score", 0)
-    away_score   = match.get("away_score", 0)
-    home_team_id = match.get("home_team_id", "")
-    away_team_id = match.get("away_team_id", "")
+    """Award points to all users with confirmed squads."""
+    mid        = match.get("id") or match.get("match_id", "")
+    home_team  = match["home_team"]
+    away_team  = match["away_team"]
+    home_score = match.get("home_score", 0)
+    away_score = match.get("away_score", 0)
+    home_tid   = match.get("home_team_id", "")
+    away_tid   = match.get("away_team_id", "")
 
     player_stats_raw = match.get("player_stats") or {}
-    lineups          = match.get("lineups") or {}
-    played_ids       = lineups.get("played_ids") or set()
+    played_ids       = match.get("played_ids") or set()
 
+    # Build team side map
     team_side = {}
-    if home_team_id: team_side[home_team_id] = "home"
-    if away_team_id: team_side[away_team_id] = "away"
+    if home_tid: team_side[home_tid] = "home"
+    if away_tid: team_side[away_tid] = "away"
 
     def _side_for_team(team_name: str) -> str:
-        if _team_matches(team_name, home_team): return "home"
-        if _team_matches(team_name, away_team): return "away"
+        n = _norm(team_name)
+        hn = _norm(home_team)
+        an = _norm(away_team)
+        if n == hn or n in hn or hn in n: return "home"
+        if n == an or n in an or an in n: return "away"
         return ""
 
-    home_bots = {pid: p for pid, p in ALL_PLAYERS.items()
-                 if _team_matches(p["team"], home_team)}
-    away_bots = {pid: p for pid, p in ALL_PLAYERS.items()
-                 if _team_matches(p["team"], away_team)}
-
+    # Map API players → our player IDs
     bot_player_stats: dict[str, dict] = {}
+    all_bot_players = get_all_players()
 
     for key, stats in player_stats_raw.items():
-        fs_pid      = stats.get("player_id", "")
         api_name    = stats.get("name", "")
         api_team_id = stats.get("team_id", "")
-        side        = team_side.get(api_team_id, "")
         minutes     = int(stats.get("minutes_played") or 0)
+        api_pid     = stats.get("player_id", "")
 
-        # Only players who actually played
+        # Only players who played
         actually_played = (
-            (fs_pid and fs_pid in played_ids) or
+            (api_pid and api_pid in played_ids) or
             stats.get("in_lineup", False) or
             minutes > 0
         )
         if not actually_played:
             continue
 
-        # Match to bot player
-        bot_player = get_player_by_espn_name(api_name)
+        side = team_side.get(api_team_id, "")
+
+        # Find matching bot player by name
+        bot_player = find_player_by_name(api_name)
+
+        # Verify team side
         if bot_player and side:
             bp_side = _side_for_team(bot_player["team"])
             if bp_side and bp_side != side:
                 bot_player = None
 
-        if not bot_player and side:
-            candidates = home_bots if side == "home" else away_bots
-            api_parts = {_norm(p.strip(".")) for p in api_name.replace(".", " ").split()
-                         if len(p.strip(".")) > 2}
-            for pid, bp in candidates.items():
-                if pid in bot_player_stats:
-                    continue
-                bp_parts = {_norm(p) for p in bp["name"].split() if len(p) > 2}
-                if api_parts & bp_parts:
-                    bot_player = bp
-                    break
-
         if not bot_player:
             continue
 
+        # Set clean sheet and goals conceded
         bp_side = _side_for_team(bot_player["team"]) or side
         if bp_side == "home":
             stats["goals_conceded"] = away_score
@@ -210,47 +182,48 @@ async def award_points(match: dict, bot=None):
 
         bot_player_stats[bot_player["id"]] = stats
 
-    logger.info("Matched %d bot players for %s vs %s",
-                len(bot_player_stats), home_team, away_team)
+    logger.info("Matched %d/%d players for %s vs %s",
+                len(bot_player_stats), len(player_stats_raw) // 2, home_team, away_team)
 
-    users = await sheets.get_all_users()
+    # Get active gameweek
+    gw = await sheets.get_active_gameweek()
+    gw_id = gw["id"] if gw else 0
+
+    # Award points to all confirmed squads
+    users   = await sheets.get_all_users()
     updated = 0
 
     for user_row in users:
         uid = int(user_row["telegram_id"])
-        squad = await sheets.get_squad(uid)
-        if not squad:
+
+        # Only confirmed squads
+        if not gw_id:
             continue
+        confirmation = await sheets.get_confirmation(uid, gw_id)
+        if not confirmation:
+            continue  # Not confirmed → 0 points
 
-        captain_id = user_row.get("captain", "")
-        try:
-            formation = squad.get("formation", "4-3-3") or "4-3-3"
-            p = formation.split("-")
-            n_def, n_mid, n_fwd = int(p[0]), int(p[1]), int(p[2])
-        except Exception:
-            n_def, n_mid, n_fwd = 4, 3, 3
+        squad_snapshot = confirmation.get("squad_snapshot") or {}
+        captain_id     = user_row.get("captain", "")
+        formation      = user_row.get("formation", "4-3-3")
 
-        starter_slots = (
-            ["gk1"] +
-            [f"def{i}" for i in range(1, n_def + 1)] +
-            [f"mf{i}"  for i in range(1, n_mid + 1)] +
-            [f"fw{i}"  for i in range(1, n_fwd + 1)]
-        )
-        sub_slots = [f"sub{i}" for i in range(1, 5)]
-        user_total = 0
+        from helpers import get_starter_slots, get_bench_slots
+        starter_slots = get_starter_slots(formation)
+        user_total    = 0
 
-        for slot in starter_slots + sub_slots:
-            pid = squad.get(slot)
+        for slot in starter_slots:
+            pid = squad_snapshot.get(slot)
             if not pid or pid not in bot_player_stats:
                 continue
+
             stats      = bot_player_stats[pid]
             is_captain = pid == captain_id
             breakdown  = build_breakdown(pid, stats, is_captain)
             breakdown["match"] = f"{home_team} {home_score}-{away_score} {away_team}"
             final_pts  = breakdown.get("total", 0)
-            await sheets.save_player_match_points(uid, pid, mid, final_pts, breakdown)
-            if slot in starter_slots:
-                user_total += final_pts
+
+            await sheets.save_player_points(uid, pid, mid, gw_id, final_pts, breakdown)
+            user_total += final_pts
 
         if user_total != 0:
             current = int(float(user_row.get("total_points") or 0))
@@ -259,25 +232,21 @@ async def award_points(match: dict, bot=None):
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
     await sheets.mark_match_points_awarded(mid)
+
     if bot:
-        await _broadcast(bot, match, points_awarded=True)
+        await broadcast_result(bot, match)
 
 
-async def _broadcast(bot, match: dict, points_awarded: bool):
+async def broadcast_result(bot, match: dict):
     users = await sheets.get_all_users()
-    score = f"{match['home_score']}-{match['away_score']}"
-    if points_awarded:
-        text = (
-            f"⚽ <b>Match Result</b>\n\n"
-            f"🏟 <b>{match['home_team']}</b> {score} <b>{match['away_team']}</b>\n\n"
-            f"🏆 Points updated! Tap <b>📊 Stats</b> to see your score."
-        )
-    else:
-        text = (
-            f"⚽ <b>Match Result</b>\n\n"
-            f"🏟 <b>{match['home_team']}</b> {score} <b>{match['away_team']}</b>\n\n"
-            f"<i>Player stats updating...</i>"
-        )
+    text  = (
+        f"⚽ <b>Match Result</b>\n\n"
+        f"🏟 <b>{match['home_team']}</b> "
+        f"{match['home_score']} - {match['away_score']} "
+        f"<b>{match['away_team']}</b>\n\n"
+        f"🏆 Points updated! Tap 📊 <b>Stats</b> to see your score.\n"
+        f"🏆 Check the 🏆 <b>Leaderboard</b> for rankings."
+    )
     sent = 0
     for u in users:
         try:
@@ -289,24 +258,145 @@ async def _broadcast(bot, match: dict, points_awarded: bool):
     logger.info("Broadcast sent to %d users.", sent)
 
 
-def _team_matches(bot_team: str, api_team: str) -> bool:
-    if not bot_team or not api_team:
-        return False
-    b, a = _norm(bot_team), _norm(api_team)
-    ALIASES = {
-        "atletico":  ["atletico de madrid", "atletico madrid"],
-        "psg":       ["paris saint-germain", "paris sg"],
-        "arsenal":   ["arsenal fc"],
-        "liverpool": ["liverpool fc"],
-        "barcelona": ["fc barcelona"],
-        "real madrid": ["real madrid cf"],
-        "bayern":    ["fc bayern munchen", "fc bayern munich", "bayern munich"],
-        "sporting":  ["sporting cp"],
-        "atalanta":  ["atalanta bc"],
-        "leverkusen":["bayer leverkusen", "bayer 04 leverkusen"],
-    }
-    for canonical, alts in ALIASES.items():
-        all_names = [_norm(canonical)] + [_norm(x) for x in alts]
-        if b in all_names and a in all_names:
-            return True
-    return b in a or a in b
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+_notified_deadlines: set[str] = set()
+_notified_windows:   set[str] = set()
+
+
+async def check_deadline_notifications(bot=None):
+    if not bot:
+        return
+    deadline = await sheets.get_confirmation_deadline()
+    if not deadline:
+        return
+
+    try:
+        dl = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+    except Exception:
+        return
+
+    now     = datetime.now(timezone.utc)
+    diff    = (dl - now).total_seconds()
+    lang_default = "en"
+
+    users = await sheets.get_all_users()
+
+    # 24h reminder
+    key_24h = f"24h:{deadline}"
+    if 0 < diff <= 86400 and key_24h not in _notified_deadlines:
+        from translations import t
+        for u in users:
+            if u.get("confirmed"):
+                continue
+            lang = u.get("language", "en")
+            try:
+                await bot.send_message(
+                    int(u["telegram_id"]),
+                    t(lang, "notif_deadline_24h", deadline=deadline[:16]),
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        _notified_deadlines.add(key_24h)
+
+    # 1h reminder
+    key_1h = f"1h:{deadline}"
+    if 0 < diff <= 3600 and key_1h not in _notified_deadlines:
+        from translations import t
+        for u in users:
+            if u.get("confirmed"):
+                continue
+            lang = u.get("language", "en")
+            try:
+                await bot.send_message(
+                    int(u["telegram_id"]),
+                    t(lang, "notif_deadline_1h", deadline=deadline[:16]),
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        _notified_deadlines.add(key_1h)
+
+
+async def check_transfer_window_notifications(bot=None):
+    if not bot:
+        return
+    from translations import t
+    ts  = await sheets.get_transfer_settings()
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Window just opened
+    key_open = f"open:{ts.get('open','')}"
+    if ts.get("open") and ts["open"] <= now and key_open not in _notified_windows:
+        users = await sheets.get_all_users()
+        for u in users:
+            lang = u.get("language", "en")
+            try:
+                await bot.send_message(
+                    int(u["telegram_id"]),
+                    t(lang, "notif_window_open", close=(ts.get("close") or "")[:16]),
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        _notified_windows.add(key_open)
+
+    # Window just closed
+    key_close = f"close:{ts.get('close','')}"
+    if ts.get("close") and ts["close"] <= now and key_close not in _notified_windows:
+        users = await sheets.get_all_users()
+        for u in users:
+            lang = u.get("language", "en")
+            try:
+                await bot.send_message(
+                    int(u["telegram_id"]),
+                    t(lang, "notif_window_close"),
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        _notified_windows.add(key_close)
+
+
+# ── Auto gameweek creation ────────────────────────────────────────────────────
+
+async def auto_create_gameweeks(matches: list):
+    """Group matches by date and create gameweeks automatically."""
+    from collections import defaultdict
+    by_date = defaultdict(list)
+    for m in matches:
+        by_date[m["date"]].append(m)
+
+    existing_gws = await sheets.get_all_gameweeks()
+    existing_dates = {gw.get("start_date") for gw in existing_gws}
+
+    gw_num = len(existing_gws) + 1
+    tournament = await sheets.get_tournament()
+
+    for date_str in sorted(by_date.keys()):
+        if date_str in existing_dates:
+            continue
+
+        # Set deadline 1 hour before first kickoff
+        day_matches = sorted(by_date[date_str], key=lambda x: x.get("kickoff_timestamp", 0))
+        first_kickoff = day_matches[0].get("kickoff_timestamp", 0)
+        if first_kickoff:
+            dl = datetime.fromtimestamp(first_kickoff, tz=timezone.utc) - timedelta(hours=1)
+            deadline = dl.isoformat()
+        else:
+            deadline = f"{date_str}T18:00:00+00:00"
+
+        await sheets.create_gameweek(
+            name         = f"Gameweek {gw_num}",
+            tournament_id= 0,
+            start_date   = date_str,
+            end_date     = date_str,
+            deadline     = deadline,
+        )
+        logger.info("Created Gameweek %d for %s", gw_num, date_str)
+        gw_num += 1

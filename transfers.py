@@ -1,136 +1,218 @@
+"""
+transfers.py — Transfer window management.
+Admin sets window open/close and free transfer count.
+Users can transfer within the window.
+Extra transfers cost -4pts each.
+"""
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-import config
 import sheets
-from states import Transfers
+import players as pl_module
+from players import get_player, get_players_by_position, fmt_price
+from states import Transfer
 from translations import t
-from players import get_player, fmt_price
-from inline import transfer_squad_keyboard, player_list_keyboard, confirm_transfer_keyboard, home_keyboard
-from helpers import get_lang
+from helpers import (
+    get_lang, get_all_slots, slot_to_position,
+    build_squad_visual, calc_squad_cost, squad_is_complete
+)
+from inline import home_keyboard, transfer_pick_out_keyboard
+import config
 
 logger = logging.getLogger(__name__)
 router = Router()
-CURRENT_MATCHDAY = "QF"  # Update this each matchday: QF / SF / F
-
-
-def _safe_budget(user):
-    raw = (user or {}).get("budget_remaining", config.TOTAL_BUDGET)
-    try:
-        return int(float(raw or config.TOTAL_BUDGET))
-    except (ValueError, TypeError):
-        return config.TOTAL_BUDGET
 
 
 @router.callback_query(F.data == "home:transfers")
-async def transfers_menu(callback: CallbackQuery, state: FSMContext):
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    formation = (user or {}).get("formation", "4-3-3") or "4-3-3"
-    free_used = await sheets.get_transfers_used(callback.from_user.id, CURRENT_MATCHDAY)
-    free_remaining = max(0, config.FREE_TRANSFERS_PER_MATCHDAY - free_used)
-    try:
+async def show_transfers(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    # Check window
+    window_open = await sheets.is_transfer_window_open()
+    if not window_open:
+        ts = await sheets.get_transfer_settings()
+        close = ts.get("close") or "N/A"
         await callback.message.edit_text(
-            t(lang, "transfer_menu", free=free_remaining),
+            t(lang, "transfers_closed"),
             parse_mode="HTML",
-            reply_markup=transfer_squad_keyboard(lang, squad_data, formation),
+            reply_markup=home_keyboard(lang)
         )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
-    await state.set_state(Transfers.menu)
-    await callback.answer()
+        await callback.answer()
+        return
 
+    # Show squad with transfer options
+    squad     = await sheets.get_squad(uid)
+    formation = user.get("formation", "4-3-3")
 
-@router.callback_query(F.data.startswith("transfer_out:"), Transfers.menu)
-async def select_player_out(callback: CallbackQuery, state: FSMContext):
-    _, pid_out, slot = callback.data.split(":", 2)
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    p_out = get_player(pid_out)
-    position = p_out["position"] if p_out else "FW"
-    await state.update_data(pid_out=pid_out, slot=slot, position=position)
+    if not squad or not squad_is_complete(squad, formation):
+        await callback.message.edit_text(
+            t(lang, "no_squad"),
+            reply_markup=home_keyboard(lang)
+        )
+        await callback.answer()
+        return
+
+    ts = await sheets.get_transfer_settings()
+    free_n = ts.get("free", config.FREE_TRANSFERS_DEFAULT)
+
+    gw = await sheets.get_active_gameweek()
+    gw_id = gw["id"] if gw else 0
+    used = await sheets.count_transfers_this_gw(uid, gw_id) if gw_id else 0
+    remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
+    cost_next = 0 if remaining_free > 0 or free_n == 0 else config.EXTRA_TRANSFER_COST
+
+    ts_settings = await sheets.get_transfer_settings()
+    close_time  = (ts_settings.get("close") or "")[:16]
+
+    lines = [
+        t(lang, "transfers_open", close=close_time),
+        t(lang, "free_transfers", n=("∞" if free_n == 0 else remaining_free)),
+        "",
+        "Select a player to <b>remove</b>:",
+    ]
+
     await callback.message.edit_text(
-        t(lang, "select_player_in", pos=position),
+        "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=player_list_keyboard(lang, position, slot, 0, squad_data),
+        reply_markup=transfer_pick_out_keyboard(squad, formation, lang)
     )
-    await state.set_state(Transfers.select_player_in)
+    await state.update_data(gw_id=gw_id, used=used, free_n=free_n, squad=squad, formation=formation)
+    await state.set_state(Transfer.pick_out)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("pick:"), Transfers.select_player_in)
-async def select_player_in(callback: CallbackQuery, state: FSMContext):
-    _, pid_in, slot = callback.data.split(":", 2)
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
+@router.callback_query(Transfer.pick_out, F.data.startswith("transfer:out:"))
+async def pick_player_out(callback: CallbackQuery, state: FSMContext):
+    _, _, pid_out, slot = callback.data.split(":")
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
     data = await state.get_data()
-    pid_out = data.get("pid_out")
-    p_in = get_player(pid_in)
+
     p_out = get_player(pid_out)
-    if not p_in or not p_out:
-        await callback.answer("Error — player not found.", show_alert=True)
-        return
-    budget = _safe_budget(user)
-    price_diff = p_in["price"] - p_out["price"]
-    if price_diff > budget:
-        await callback.answer(t(lang, "no_budget"), show_alert=True)
-        return
-    free_used = await sheets.get_transfers_used(callback.from_user.id, CURRENT_MATCHDAY)
-    is_free = free_used < config.FREE_TRANSFERS_PER_MATCHDAY
-    cost_msg = t(lang, "transfer_free_cost") if is_free else t(lang, "transfer_points_cost")
-    await state.update_data(pid_in=pid_in)
+    pos   = p_out["position"] if p_out else slot_to_position(slot)
+
+    # Show available replacements
+    budget_used = calc_squad_cost(data["squad"])
+    budget_free = config.TOTAL_BUDGET - budget_used + (p_out["price"] if p_out else 0)
+
+    available = [
+        p for p in get_players_by_position(pos)
+        if p["price"] <= budget_free and p["id"] not in data["squad"].values()
+    ]
+
+    kb = InlineKeyboardBuilder()
+    for p in available[:20]:
+        kb.button(
+            text=f"{p['name']} ({p['team']}) — {fmt_price(p['price'])}",
+            callback_data=f"transfer:in:{p['id']}"
+        )
+    kb.button(text=t(lang, "back"), callback_data="home:transfers")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
+
+    name_out = p_out["name"] if p_out else pid_out
     await callback.message.edit_text(
-        t(lang, "confirm_transfer", out=p_out["name"], **{"in": p_in["name"]}, cost_msg=cost_msg),
+        f"❌ Removing: <b>{name_out}</b>\n\n"
+        f"💰 Budget for replacement: {fmt_price(budget_free)}\n\n"
+        f"Pick replacement <b>{pos}</b>:",
         parse_mode="HTML",
-        reply_markup=confirm_transfer_keyboard(lang, pid_out, pid_in, slot),
+        reply_markup=kb.as_markup()
     )
-    await state.set_state(Transfers.confirming)
+    await state.update_data(pid_out=pid_out, slot_out=slot, pos=pos)
+    await state.set_state(Transfer.pick_in)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("transfer_confirm:"), Transfers.confirming)
-async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
-    _, pid_out, pid_in, slot = callback.data.split(":", 3)
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    p_in = get_player(pid_in)
+@router.callback_query(Transfer.pick_in, F.data.startswith("transfer:in:"))
+async def pick_player_in(callback: CallbackQuery, state: FSMContext):
+    pid_in = callback.data.split(":")[2]
+    uid    = callback.from_user.id
+    user   = await sheets.get_user(uid)
+    lang   = await get_lang(uid, user)
+    data   = await state.get_data()
+
+    pid_out  = data["pid_out"]
+    slot_out = data["slot_out"]
+    gw_id    = data.get("gw_id", 0)
+    used     = data.get("used", 0)
+    free_n   = data.get("free_n", config.FREE_TRANSFERS_DEFAULT)
+
     p_out = get_player(pid_out)
-    if not p_in or not p_out:
-        await callback.answer("Error.", show_alert=True)
-        return
-    budget = _safe_budget(user)
-    budget += p_out["price"]
-    budget -= p_in["price"]
-    squad_data[slot] = pid_in
-    # Clear captain if transferred out
-    if squad_data.get("captain") == pid_out or (user or {}).get("captain") == pid_out:
-        squad_data["captain"] = ""
-        await sheets.update_user(callback.from_user.id, captain="")
-    await sheets.save_squad(callback.from_user.id, squad_data)
-    await sheets.update_user(callback.from_user.id, budget_remaining=budget)
-    # Count transfer and apply points penalty if needed
-    free_used = await sheets.get_transfers_used(callback.from_user.id, CURRENT_MATCHDAY)
-    is_free = free_used < config.FREE_TRANSFERS_PER_MATCHDAY
-    cost_label = "free" if is_free else f"-{config.EXTRA_TRANSFER_COST_PTS}pts"
-    await sheets.log_transfer(callback.from_user.id, CURRENT_MATCHDAY, pid_out, pid_in, cost_label)
-    if not is_free:
-        pts = int(float((user or {}).get("total_points", 0) or 0))
-        await sheets.update_user(
-            callback.from_user.id,
-            total_points=max(0, pts - config.EXTRA_TRANSFER_COST_PTS)
-        )
-    submitted = ((user or {}).get("squad_submitted", "no") == "yes")
+    p_in  = get_player(pid_in)
+
+    # Calculate cost
+    remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
+    cost = 0 if remaining_free > 0 or free_n == 0 else config.EXTRA_TRANSFER_COST
+
+    name_out = p_out["name"] if p_out else pid_out
+    name_in  = p_in["name"]  if p_in  else pid_in
+
+    # Confirm
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Confirm Transfer", callback_data="transfer:confirm")
+    kb.button(text="❌ Cancel",          callback_data="home:transfers")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
+
+    cost_text = f"\n⚠️ This costs <b>{cost} pts</b>" if cost else ""
+
     await callback.message.edit_text(
-        t(lang, "transfer_done"),
+        f"🔄 <b>Transfer</b>\n\n"
+        f"❌ Out: <b>{name_out}</b>\n"
+        f"✅ In:  <b>{name_in}</b>"
+        f"{cost_text}\n\nConfirm?",
         parse_mode="HTML",
-        reply_markup=home_keyboard(lang, callback.from_user.id, submitted, True),
+        reply_markup=kb.as_markup()
     )
-    await state.set_state(None)
+    await state.update_data(pid_in=pid_in, cost=cost)
+    await state.set_state(Transfer.confirm)
+    await callback.answer()
+
+
+@router.callback_query(Transfer.confirm, F.data == "transfer:confirm")
+async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+    data = await state.get_data()
+
+    pid_out  = data["pid_out"]
+    pid_in   = data["pid_in"]
+    slot_out = data["slot_out"]
+    gw_id    = data.get("gw_id", 0)
+    cost     = data.get("cost", 0)
+
+    # Update squad
+    squad = await sheets.get_squad(uid)
+    if squad:
+        squad[slot_out] = pid_in
+        await sheets.save_squad(uid, squad)
+
+    # Log transfer
+    await sheets.log_transfer(uid, pid_out, pid_in, gw_id, cost)
+
+    # Apply point cost
+    if cost > 0:
+        current_pts = int(user.get("total_points") or 0)
+        await sheets.update_user(uid, total_points=current_pts - cost, confirmed=False)
+    else:
+        await sheets.update_user(uid, confirmed=False)
+
+    p_out = get_player(pid_out)
+    p_in  = get_player(pid_in)
+    name_out = p_out["name"] if p_out else pid_out
+    name_in  = p_in["name"]  if p_in  else pid_in
+
+    await callback.message.edit_text(
+        t(lang, "transfer_done", **{"out": name_out, "in": name_in}),
+        parse_mode="HTML",
+        reply_markup=home_keyboard(lang)
+    )
+    await state.clear()
     await callback.answer()

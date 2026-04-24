@@ -1,359 +1,312 @@
-# All bot messages in 4 languages
-# IT / FR / ES are placeholder — replace with professional translations before launch
+"""
+translations.py — All bot messages in EN, IT, FR, ES.
+"""
 
-T = {
+STRINGS = {
     "en": {
-        "lang_flag": "🇬🇧",
-        "ask_username": (
-            "👋 Welcome to <b>Rolletto Fantasy Football</b>!\n\n"
-            "To get started, please enter your <b>Rolletto username</b>:"
-        ),
-        "checking": "🔍 Checking your account...",
-        "not_found": (
-            "❌ We couldn't find your Rolletto account.\n\n"
-            "Please sign up at Rolletto and use <b>@rollettopromobot</b> to get free spins "
-            "and register in our system.\n\n"
-            "👉 <a href='{url}'>Sign up here</a>\n\n"
-            "Once registered, use /check to try again."
-        ),
-        "still_not_found": (
-            "⏳ We still couldn't find your account.\n\n"
-            "Our team has been notified and will grant you access manually within <b>24 hours</b>.\n"
-            "Please be patient!"
-        ),
-        "found_welcome": "✅ Account verified! Welcome, <b>{username}</b>!\n\nPlease choose your language:",
-        "choose_lang": "🌍 Please choose your language:",
-        "rules_title": (
-            "📋 <b>ROLLETTO FANTASY FOOTBALL — RULES</b>\n\n"
-            "🏆 <b>Champions League Edition</b>\n\n"
-            "<b>How it works:</b>\n"
-            "Build a squad of 15 players with a €100M budget and score points based on real CL match performance.\n\n"
-            "<b>💰 Prizes — Top 10:</b>\n"
-            "🥇 1st — €500 bonus\n"
-            "🥈 2nd — €300 bonus\n"
-            "🥉 3rd — €150 bonus\n"
-            "4th — €100 bonus\n"
-            "5th — €75 bonus\n"
-            "6th — €50 bonus\n"
-            "7th–10th — €25 bonus each\n\n"
-            "<b>📊 Points system:</b>\n"
-            "⚽ Goal (FW/MF) → +5 pts\n"
-            "⚽ Goal (DEF/GK) → +10 pts\n"
-            "🅰️ Assist → +3 pts\n"
-            "🧤 Clean sheet (GK/DEF) → +4 pts\n"
-            "🟨 Yellow card → -1 pt\n"
-            "🟥 Red card → -3 pts\n"
-            "❌ Penalty miss → -2 pts\n\n"
-            "<b>🔄 Transfers:</b>\n"
-            "2 free transfers per matchday. Extra transfers cost -4 pts each.\n\n"
-            "<b>🛡️ Fair play:</b>\n"
-            "One account per person. No bots or multiple accounts. Violations = disqualification.\n\n"
-            "By accepting you confirm you have read and agree to all rules."
-        ),
-        "accept_btn":      "✅ Accept & Continue",
-        "home_title": (
-            "🏠 <b>HOME</b>\n\n"
-            "💰 Budget: <b>{budget}</b>\n"
-            "👥 Squad: <b>{filled}/15</b> players\n"
-            "⭐ Captain: <b>{captain}</b>\n"
-            "📊 Total points: <b>{points}</b>"
-        ),
-        "choose_formation": "⚽ Choose your formation:",
-        "formation_set": "✅ Formation <b>{f}</b> selected!\n\nNow build your squad below.",
-        "squad_view": (
-            "📋 <b>YOUR SQUAD</b> — {formation}\n"
-            "💰 Remaining budget: <b>{budget}</b>\n\n"
-            "{visual}\n\n"
-            "🔵 Tap a position to add a player."
-        ),
-        "choose_position": "Select a position to fill:",
-        "pick_player": "👇 Choose a <b>{pos}</b> (Page {page}/{total}):",
-        "no_budget":    "❌ Not enough budget for this player!",
-        "already_in":   "❌ This player is already in your squad!",
-        "confirm_player": (
-            "➕ Add <b>{name}</b> {nation} ({team}) — {price}?\n\n"
-            "💰 Remaining after: <b>{remaining}</b>"
-        ),
-        "yes_btn":    "✅ Yes, add",
-        "no_btn":     "❌ Cancel",
-        "player_added": "✅ <b>{name}</b> added to your squad!",
-        "choose_captain": "⭐ Choose your captain (scores double points):",
-        "captain_set":    "⭐ <b>{name}</b> set as captain!",
-        "confirm_submit": (
-            "🚀 <b>Submit your squad?</b>\n\n"
-            "Formation: {formation}\n"
-            "Captain: {captain}\n"
-            "Budget used: {spent}\n\n"
-            "You can still edit until the deadline."
-        ),
-        "squad_submitted": "🎉 Squad submitted successfully! Good luck! 🏆",
-        "squad_incomplete": "⚠️ Please fill all 15 squad slots before submitting.",
-        "no_captain": "⚠️ Please set a captain before submitting.",
-        "transfer_menu": (
-            "🔄 <b>TRANSFERS</b>\n\n"
-            "Free transfers remaining: <b>{free}</b>\n"
-            "Extra transfer cost: -4 pts each\n\n"
-            "Select a player to transfer OUT:"
-        ),
-        "select_player_in": "👇 Choose a replacement <b>{pos}</b>:",
-        "confirm_transfer": (
-            "🔄 Transfer <b>{out}</b> → <b>{in}</b>?\n\n"
-            "{cost_msg}"
-        ),
-        "transfer_free_cost": "✅ This is a free transfer.",
-        "transfer_points_cost": "⚠️ This transfer costs <b>-4 points</b>.",
-        "transfer_done": "✅ Transfer complete!",
-        "back_home": "🏠 Home",
-        "transfers_btn": "🔄 Transfers",
-        "my_squad_btn": "📋 My Squad",
-        "leaderboard_btn": "📊 Leaderboard",
-        "stats_btn":      "📊 Stats",
-        "results_btn":    "🏟 Results",
-        "rules_btn":       "📋 Rules",
-        "admin_btn": "⚙️ Admin",
-        "leaderboard_empty": "📊 Leaderboard is empty so far. Be the first to submit your squad!",
-        "leaderboard_title": "📊 <b>LEADERBOARD — Top 10</b>\n\n",
-        # Admin
-        "admin_menu": "⚙️ <b>ADMIN PANEL</b>\n\nChoose an action:",
-        "admin_send_msg":   "📨 Message User",
-        "admin_broadcast":  "📢 Broadcast",
-        "admin_pending":    "⏳ Pending Users",
-        "admin_get_id":     "Enter the user's Telegram ID:",
-        "admin_get_msg":    "Now send the message (text or photo) to forward to the user:",
-        "admin_get_bc_ids": "Send a list of Telegram IDs separated by commas, or type <b>ALL</b> to send to everyone:",
-        "admin_confirm_send": "Send this message to <b>{n} user(s)</b>?",
-        "admin_send_done":  "✅ Message sent to {n} user(s).",
-        "admin_user_not_found": "❌ User not found in database.",
-        "promo_get_id":   "Enter the Telegram ID of the user to receive the promo:",
-        "promo_get_code": "Enter the promo code to send:",
-        "promo_confirm":  "Send promo code <b>{code}</b> to user <b>{uid}</b>?",
-        "promo_sent":     "🎁 Your exclusive Rolletto promo code: <b>{code}</b>",
-        "promo_done":     "✅ Promo code sent.",
-        "pending_list":   "⏳ <b>Pending access requests:</b>\n\n{list}",
-        "pending_empty":  "✅ No pending access requests.",
-        # Admin notification sent to admin chat
-        "admin_notify_pending": (
-            "🔔 <b>New access request</b>\n\n"
-            "Telegram ID: <code>{tg_id}</code>\n"
-            "Telegram username: @{tg_username}\n"
-            "Rolletto username: <b>{rolletto}</b>\n"
-            "Time: {time}\n\n"
-            "User tried /check and was still not found in the sheets."
-        ),
-    },
+        # General
+        "back_home":        "🏠 Home",
+        "back":             "◀️ Back",
+        "cancel":           "❌ Cancel",
+        "confirm":          "✅ Confirm",
 
+        # Registration
+        "welcome":          "🌍 Welcome! Please choose your language:",
+        "enter_username":   "👤 Please enter your Rolletto username to verify your account:",
+        "verifying":        "🔄 Verifying...",
+        "verified":         "✅ Welcome, {username}! You're now registered.",
+        "not_found":        "❌ Username not found. Please register at {url} first.",
+        "already_reg":      "✅ You are already registered. Use /start to go home.",
+
+        # Home
+        "home_title":       "🏆 <b>Rolletto Fantasy</b>\n\n{status}",
+        "btn_squad":        "📋 My Squad",
+        "btn_transfers":    "🔄 Transfers",
+        "btn_confirm":      "✅ Confirm Squad",
+        "btn_stats":        "📊 My Stats",
+        "btn_results":      "🏟 Results",
+        "btn_leaderboard":  "🏆 Leaderboard",
+        "btn_rules":        "📖 Rules",
+
+        # Squad
+        "build_squad":      "⚽ <b>Squad Builder</b>\n\nChoose your formation:",
+        "pick_formation":   "Choose formation:",
+        "budget_left":      "💰 Budget remaining: {budget}",
+        "pick_pos":         "Pick your <b>{pos}</b> ({n} remaining):",
+        "squad_full":       "✅ Squad complete! Set your captain:",
+        "pick_captain":     "⭐ Choose your captain (×2 points):",
+        "captain_set":      "⭐ Captain: <b>{name}</b>",
+        "squad_summary":    "📋 <b>Your Squad</b>\n\n{lineup}\n\n💰 Spent: {spent}\n⭐ Captain: {captain}",
+        "no_captain":       "❌ You must set a captain before confirming.",
+        "squad_confirmed":  "✅ <b>Squad confirmed!</b> Good luck! 🍀",
+        "already_confirmed":"✅ Your squad is already confirmed for this gameweek.",
+        "deadline_passed":  "❌ Confirmation deadline has passed. Your squad is locked.",
+        "no_squad":         "❌ You don't have a squad yet. Go to 📋 My Squad to build one.",
+        "over_budget":      "❌ Over budget! Remove a player first.",
+
+        # Transfers
+        "transfers_closed": "🔒 Transfer window is closed.",
+        "transfers_open":   "🔓 Transfer window is open until {close}.",
+        "free_transfers":   "Free transfers: {n}",
+        "pick_remove":      "Select a player to remove:",
+        "pick_add":         "Select replacement ({pos}):",
+        "transfer_done":    "✅ Transfer complete: {out} → {in}",
+        "extra_cost":       "⚠️ This transfer costs {pts} pts.",
+        "no_transfers":     "❌ No transfers available.",
+
+        # Stats
+        "stats_title":      "📊 <b>My Stats</b>\n🏆 Total: <b>{total} pts</b>\n",
+        "no_stats":         "No points yet. Play some gameweeks!",
+        "player_detail":    "📊 <b>{name}</b> — {team}\n💰 {price} | Total: <b>{total} pts</b>\n",
+
+        # Results
+        "results_title":    "🏟 <b>Recent Results</b>",
+        "no_results":       "No results yet.",
+
+        # Leaderboard
+        "lb_overall":       "🏆 <b>Overall Leaderboard</b>",
+        "lb_gameweek":      "📅 <b>Gameweek {n} Leaderboard</b>",
+        "lb_entry":         "{rank}. {username} — {pts} pts",
+        "lb_btn_overall":   "🏆 Overall",
+        "lb_btn_gw":        "📅 This Gameweek",
+
+        # Rules
+        "rules_title":      "📖 <b>Points System</b>",
+        "rules_text": """
+<b>All Players:</b>
+▸ Played: +1 pt
+▸ 60+ min: +1 pt
+▸ Assist: +3 pts
+▸ Penalty earned: +2 pts
+▸ Penalty conceded: -1 pt
+▸ Penalty missed: -2 pts
+▸ Yellow card: -1 pt
+▸ Red card: -3 pts
+▸ Yellow + Red: -4 pts
+▸ Own goal: -2 pts
+▸ Def. actions (per 3): +1 pt
+
+<b>Goalkeeper:</b>
+▸ Goal: +6 pts
+▸ Penalty saved: +5 pts
+▸ Clean sheet (60+ min): +4 pts
+▸ Goals conceded (per 2): -1 pt
+▸ Saves (per 3): +1 pt
+
+<b>Defender:</b>
+▸ Goal: +6 pts
+▸ Clean sheet (60+ min): +4 pts
+▸ Goals conceded (per 2): -1 pt
+
+<b>Midfielder:</b>
+▸ Goal: +5 pts
+▸ Clean sheet (60+ min): +1 pt
+
+<b>Forward:</b>
+▸ Goal: +4 pts
+
+<b>Captain: ×2 all points</b>
+""",
+
+        # Notifications
+        "notif_deadline_24h": "⏰ <b>24 hours left!</b>\nConfirm your squad before the deadline:\n{deadline}",
+        "notif_deadline_1h":  "🚨 <b>1 hour left!</b>\nConfirm your squad NOW:\n{deadline}",
+        "notif_window_open":  "🔓 <b>Transfer window is open!</b>\nMake your transfers before {close}",
+        "notif_window_close": "🔒 <b>Transfer window has closed.</b>",
+        "notif_result":       "⚽ <b>Match Result</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 Points updated! Tap 📊 Stats to see your score.",
+        "notif_gw_summary":   "📊 <b>Gameweek {n} finished!</b>\nYour score: <b>{pts} pts</b>\nTap 🏆 Leaderboard to see rankings.",
+    },
     "it": {
-        "lang_flag": "🇮🇹",
-        "ask_username": "👋 Benvenuto su <b>Rolletto Fantasy Football</b>!\n\nInserisci il tuo <b>username Rolletto</b>:",
-        "checking": "🔍 Verifica in corso...",
-        "not_found": (
-            "❌ Account Rolletto non trovato.\n\n"
-            "Registrati su Rolletto e usa <b>@rollettopromobot</b> per ricevere giri gratuiti.\n\n"
-            "👉 <a href='{url}'>Registrati qui</a>\n\n"
-            "Una volta registrato, usa /check per riprovare."
-        ),
-        "still_not_found": "⏳ Account ancora non trovato. Il nostro team ti darà accesso entro <b>24 ore</b>.",
-        "found_welcome": "✅ Account verificato! Benvenuto, <b>{username}</b>!\n\nScegli la lingua:",
-        "choose_lang": "🌍 Scegli la tua lingua:",
-        "rules_title": "📋 <b>REGOLE ROLLETTO FANTASY</b>\n\n[Versione italiana — da tradurre professionalmente]",
-        "accept_btn": "✅ Accetta e Continua",
-        "home_title": "🏠 <b>HOME</b>\n\n💰 Budget: <b>{budget}</b>\n👥 Rosa: <b>{filled}/15</b>\n⭐ Capitano: <b>{captain}</b>\n📊 Punti: <b>{points}</b>",
-        "choose_formation": "⚽ Scegli il modulo:",
-        "formation_set": "✅ Modulo <b>{f}</b> selezionato!",
-        "squad_view": "📋 <b>LA TUA ROSA</b> — {formation}\n💰 Budget rimanente: <b>{budget}</b>\n\n{visual}\n\n🔵 Tocca una posizione.",
-        "choose_position": "Seleziona una posizione:",
-        "pick_player": "👇 Scegli un <b>{pos}</b> (Pag {page}/{total}):",
-        "no_budget": "❌ Budget insufficiente!",
-        "already_in": "❌ Giocatore già nella rosa!",
-        "confirm_player": "➕ Aggiungere <b>{name}</b> {nation} ({team}) — {price}?\n\n💰 Rimanente: <b>{remaining}</b>",
-        "yes_btn": "✅ Sì, aggiungi",
-        "no_btn": "❌ Annulla",
-        "player_added": "✅ <b>{name}</b> aggiunto!",
-        "choose_captain": "⭐ Scegli il capitano:",
-        "captain_set": "⭐ <b>{name}</b> è il capitano!",
-        "confirm_submit": "🚀 <b>Confermi la rosa?</b>\n\nModulo: {formation}\nCapitano: {captain}\nBudget usato: {spent}",
-        "squad_submitted": "🎉 Rosa inviata! Buona fortuna! 🏆",
-        "squad_incomplete": "⚠️ Completa tutti i 15 slot prima di inviare.",
-        "no_captain": "⚠️ Seleziona un capitano prima di inviare.",
-        "transfer_menu": "🔄 <b>TRASFERIMENTI</b>\n\nTrasferimenti gratuiti: <b>{free}</b>\nCosto extra: -4 punti\n\nSeleziona il giocatore da cedere:",
-        "select_player_in": "👇 Scegli il sostituto <b>{pos}</b>:",
-        "confirm_transfer": "🔄 Cedere <b>{out}</b> → <b>{in}</b>?\n\n{cost_msg}",
-        "transfer_free_cost": "✅ Trasferimento gratuito.",
-        "transfer_points_cost": "⚠️ Questo trasferimento costa <b>-4 punti</b>.",
-        "transfer_done": "✅ Trasferimento completato!",
-        "back_home": "🏠 Home",
-        "transfers_btn": "🔄 Trasferimenti",
-        "my_squad_btn": "📋 La mia Rosa",
-        "leaderboard_btn": "📊 Classifica",
-        "stats_btn":      "📊 Statistiche",
-        "results_btn":    "🏟 Risultati",
-        "rules_btn":       "📋 Regole",
-        "admin_btn": "⚙️ Admin",
-        "leaderboard_empty": "📊 Classifica vuota. Sii il primo!",
-        "leaderboard_title": "📊 <b>CLASSIFICA — Top 10</b>\n\n",
-        "admin_menu": "⚙️ <b>PANNELLO ADMIN</b>",
-        "admin_send_msg": "📨 Messaggio Utente",
-        "admin_broadcast": "📢 Broadcast",
-        "admin_pending": "⏳ Utenti in Attesa",
-        "admin_get_id": "Inserisci il Telegram ID dell'utente:",
-        "admin_get_msg": "Invia il messaggio da inviare:",
-        "admin_get_bc_ids": "Inserisci gli ID separati da virgola, o scrivi <b>ALL</b>:",
-        "admin_confirm_send": "Inviare a <b>{n} utente(i)</b>?",
-        "admin_send_done": "✅ Messaggio inviato a {n} utente(i).",
-        "admin_user_not_found": "❌ Utente non trovato.",
-        "promo_get_id": "Inserisci il Telegram ID:",
-        "promo_get_code": "Inserisci il codice promo:",
-        "promo_confirm": "Inviare il codice <b>{code}</b> all'utente <b>{uid}</b>?",
-        "promo_sent": "🎁 Il tuo codice promo esclusivo Rolletto: <b>{code}</b>",
-        "promo_done": "✅ Codice promo inviato.",
-        "pending_list": "⏳ <b>Richieste in attesa:</b>\n\n{list}",
-        "pending_empty": "✅ Nessuna richiesta in attesa.",
-        "admin_notify_pending": "🔔 <b>Nuova richiesta di accesso</b>\n\nTelegram ID: <code>{tg_id}</code>\n@{tg_username}\nRolletto: <b>{rolletto}</b>\nOra: {time}",
+        "back_home":        "🏠 Home",
+        "back":             "◀️ Indietro",
+        "cancel":           "❌ Annulla",
+        "confirm":          "✅ Conferma",
+        "welcome":          "🌍 Benvenuto! Scegli la tua lingua:",
+        "enter_username":   "👤 Inserisci il tuo nome utente Rolletto:",
+        "verifying":        "🔄 Verifica in corso...",
+        "verified":         "✅ Benvenuto, {username}! Sei registrato.",
+        "not_found":        "❌ Utente non trovato. Registrati su {url}.",
+        "already_reg":      "✅ Sei già registrato.",
+        "home_title":       "🏆 <b>Rolletto Fantasy</b>\n\n{status}",
+        "btn_squad":        "📋 La Mia Squadra",
+        "btn_transfers":    "🔄 Trasferimenti",
+        "btn_confirm":      "✅ Conferma Squadra",
+        "btn_stats":        "📊 Le Mie Statistiche",
+        "btn_results":      "🏟 Risultati",
+        "btn_leaderboard":  "🏆 Classifica",
+        "btn_rules":        "📖 Regole",
+        "build_squad":      "⚽ <b>Crea Squadra</b>\n\nScegli il tuo modulo:",
+        "pick_formation":   "Scegli modulo:",
+        "budget_left":      "💰 Budget rimanente: {budget}",
+        "pick_pos":         "Scegli il tuo <b>{pos}</b> ({n} rimasti):",
+        "squad_full":       "✅ Squadra completa! Scegli il capitano:",
+        "pick_captain":     "⭐ Scegli il capitano (×2 punti):",
+        "captain_set":      "⭐ Capitano: <b>{name}</b>",
+        "squad_confirmed":  "✅ <b>Squadra confermata!</b> Buona fortuna! 🍀",
+        "deadline_passed":  "❌ Scadenza passata.",
+        "no_squad":         "❌ Non hai ancora una squadra.",
+        "transfers_closed": "🔒 Finestra trasferimenti chiusa.",
+        "transfers_open":   "🔓 Finestra trasferimenti aperta fino a {close}.",
+        "free_transfers":   "Trasferimenti gratuiti: {n}",
+        "transfer_done":    "✅ Trasferimento: {out} → {in}",
+        "stats_title":      "📊 <b>Le Mie Statistiche</b>\n🏆 Totale: <b>{total} pts</b>\n",
+        "results_title":    "🏟 <b>Risultati Recenti</b>",
+        "lb_overall":       "🏆 <b>Classifica Generale</b>",
+        "lb_gameweek":      "📅 <b>Classifica Giornata {n}</b>",
+        "lb_entry":         "{rank}. {username} — {pts} pts",
+        "lb_btn_overall":   "🏆 Generale",
+        "lb_btn_gw":        "📅 Questa Giornata",
+        "rules_title":      "📖 <b>Sistema Punteggi</b>",
+        "rules_text":       "Vedi versione EN per le regole complete.",
+        "notif_result":     "⚽ <b>Risultato</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 Punti aggiornati!",
+        "notif_gw_summary": "📊 <b>Giornata {n} finita!</b>\nI tuoi punti: <b>{pts}</b>",
+        "notif_deadline_24h":"⏰ <b>24 ore rimaste!</b>\nConferma la squadra: {deadline}",
+        "notif_deadline_1h": "🚨 <b>1 ora rimasta!</b>\nConferma ORA: {deadline}",
+        "notif_window_open": "🔓 <b>Finestra aperta!</b>\nFai i trasferimenti prima di {close}",
+        "notif_window_close":"🔒 <b>Finestra chiusa.</b>",
+        "no_captain":       "❌ Devi impostare un capitano.",
+        "over_budget":      "❌ Budget superato!",
+        "no_stats":         "Nessun punto ancora.",
+        "no_results":       "Nessun risultato.",
+        "already_confirmed":"✅ Squadra già confermata.",
+        "squad_summary":    "📋 <b>La Tua Squadra</b>\n\n{lineup}\n\n💰 Speso: {spent}\n⭐ Capitano: {captain}",
+        "pick_remove":      "Seleziona giocatore da rimuovere:",
+        "pick_add":         "Seleziona sostituto ({pos}):",
+        "extra_cost":       "⚠️ Questo trasferimento costa {pts} pts.",
+        "no_transfers":     "❌ Nessun trasferimento disponibile.",
+        "player_detail":    "📊 <b>{name}</b> — {team}\n💰 {price} | Totale: <b>{total} pts</b>\n",
+        "lb_btn_gw":        "📅 Questa Giornata",
     },
-
     "fr": {
-        "lang_flag": "🇫🇷",
-        "ask_username": "👋 Bienvenue sur <b>Rolletto Fantasy Football</b>!\n\nEntrez votre <b>nom d'utilisateur Rolletto</b>:",
-        "checking": "🔍 Vérification en cours...",
-        "not_found": (
-            "❌ Compte Rolletto introuvable.\n\n"
-            "Inscrivez-vous sur Rolletto et utilisez <b>@rollettopromobot</b> pour recevoir des tours gratuits.\n\n"
-            "👉 <a href='{url}'>S'inscrire ici</a>\n\n"
-            "Une fois inscrit, utilisez /check pour réessayer."
-        ),
-        "still_not_found": "⏳ Compte toujours introuvable. Notre équipe vous donnera accès dans <b>24 heures</b>.",
-        "found_welcome": "✅ Compte vérifié! Bienvenue, <b>{username}</b>!\n\nChoisissez votre langue:",
-        "choose_lang": "🌍 Choisissez votre langue:",
-        "rules_title": "📋 <b>RÈGLES ROLLETTO FANTASY</b>\n\n[Version française — à traduire professionnellement]",
-        "accept_btn": "✅ Accepter et Continuer",
-        "home_title": "🏠 <b>ACCUEIL</b>\n\n💰 Budget: <b>{budget}</b>\n👥 Équipe: <b>{filled}/15</b>\n⭐ Capitaine: <b>{captain}</b>\n📊 Points: <b>{points}</b>",
-        "choose_formation": "⚽ Choisissez votre formation:",
-        "formation_set": "✅ Formation <b>{f}</b> sélectionnée!",
-        "squad_view": "📋 <b>VOTRE ÉQUIPE</b> — {formation}\n💰 Budget restant: <b>{budget}</b>\n\n{visual}\n\n🔵 Appuyez sur un poste.",
-        "choose_position": "Sélectionnez un poste:",
-        "pick_player": "👇 Choisissez un <b>{pos}</b> (Page {page}/{total}):",
-        "no_budget": "❌ Budget insuffisant!",
-        "already_in": "❌ Joueur déjà dans votre équipe!",
-        "confirm_player": "➕ Ajouter <b>{name}</b> {nation} ({team}) — {price}?\n\n💰 Restant: <b>{remaining}</b>",
-        "yes_btn": "✅ Oui, ajouter",
-        "no_btn": "❌ Annuler",
-        "player_added": "✅ <b>{name}</b> ajouté!",
-        "choose_captain": "⭐ Choisissez votre capitaine:",
-        "captain_set": "⭐ <b>{name}</b> est capitaine!",
-        "confirm_submit": "🚀 <b>Confirmer votre équipe?</b>\n\nFormation: {formation}\nCapitaine: {captain}\nBudget utilisé: {spent}",
-        "squad_submitted": "🎉 Équipe soumise! Bonne chance! 🏆",
-        "squad_incomplete": "⚠️ Remplissez les 15 slots avant de soumettre.",
-        "no_captain": "⚠️ Choisissez un capitaine avant de soumettre.",
-        "transfer_menu": "🔄 <b>TRANSFERTS</b>\n\nTransferts gratuits: <b>{free}</b>\nCoût supplémentaire: -4 pts\n\nSélectionnez un joueur à transférer:",
-        "select_player_in": "👇 Choisissez un remplaçant <b>{pos}</b>:",
-        "confirm_transfer": "🔄 Transférer <b>{out}</b> → <b>{in}</b>?\n\n{cost_msg}",
-        "transfer_free_cost": "✅ Transfert gratuit.",
-        "transfer_points_cost": "⚠️ Ce transfert coûte <b>-4 points</b>.",
-        "transfer_done": "✅ Transfert effectué!",
-        "back_home": "🏠 Accueil",
-        "transfers_btn": "🔄 Transferts",
-        "my_squad_btn": "📋 Mon Équipe",
-        "leaderboard_btn": "📊 Classement",
-        "stats_btn":      "📊 Statistiques",
-        "results_btn":    "🏟 Résultats",
-        "rules_btn":       "📋 Règles",
-        "admin_btn": "⚙️ Admin",
-        "leaderboard_empty": "📊 Classement vide. Soyez le premier!",
-        "leaderboard_title": "📊 <b>CLASSEMENT — Top 10</b>\n\n",
-        "admin_menu": "⚙️ <b>PANNEAU ADMIN</b>",
-        "admin_send_msg": "📨 Message Utilisateur",
-        "admin_broadcast": "📢 Diffusion",
-        "admin_pending": "⏳ Utilisateurs en Attente",
-        "admin_get_id": "Entrez l'ID Telegram de l'utilisateur:",
-        "admin_get_msg": "Envoyez le message à transmettre:",
-        "admin_get_bc_ids": "Entrez les IDs séparés par des virgules, ou tapez <b>ALL</b>:",
-        "admin_confirm_send": "Envoyer à <b>{n} utilisateur(s)</b>?",
-        "admin_send_done": "✅ Message envoyé à {n} utilisateur(s).",
-        "admin_user_not_found": "❌ Utilisateur introuvable.",
-        "promo_get_id": "Entrez l'ID Telegram:",
-        "promo_get_code": "Entrez le code promo:",
-        "promo_confirm": "Envoyer le code <b>{code}</b> à l'utilisateur <b>{uid}</b>?",
-        "promo_sent": "🎁 Votre code promo exclusif Rolletto: <b>{code}</b>",
-        "promo_done": "✅ Code promo envoyé.",
-        "pending_list": "⏳ <b>Demandes en attente:</b>\n\n{list}",
-        "pending_empty": "✅ Aucune demande en attente.",
-        "admin_notify_pending": "🔔 <b>Nouvelle demande d'accès</b>\n\nTelegram ID: <code>{tg_id}</code>\n@{tg_username}\nRolletto: <b>{rolletto}</b>\nHeure: {time}",
+        "back_home":        "🏠 Accueil",
+        "back":             "◀️ Retour",
+        "cancel":           "❌ Annuler",
+        "confirm":          "✅ Confirmer",
+        "welcome":          "🌍 Bienvenue! Choisissez votre langue:",
+        "enter_username":   "👤 Entrez votre nom d'utilisateur Rolletto:",
+        "verifying":        "🔄 Vérification...",
+        "verified":         "✅ Bienvenue, {username}! Vous êtes inscrit.",
+        "not_found":        "❌ Utilisateur introuvable. Inscrivez-vous sur {url}.",
+        "already_reg":      "✅ Vous êtes déjà inscrit.",
+        "home_title":       "🏆 <b>Rolletto Fantasy</b>\n\n{status}",
+        "btn_squad":        "📋 Mon Équipe",
+        "btn_transfers":    "🔄 Transferts",
+        "btn_confirm":      "✅ Confirmer Équipe",
+        "btn_stats":        "📊 Mes Stats",
+        "btn_results":      "🏟 Résultats",
+        "btn_leaderboard":  "🏆 Classement",
+        "btn_rules":        "📖 Règles",
+        "build_squad":      "⚽ <b>Créer Équipe</b>\n\nChoisissez votre formation:",
+        "pick_formation":   "Choisir formation:",
+        "budget_left":      "💰 Budget restant: {budget}",
+        "pick_pos":         "Choisissez votre <b>{pos}</b> ({n} restants):",
+        "squad_full":       "✅ Équipe complète! Choisissez le capitaine:",
+        "pick_captain":     "⭐ Choisissez le capitaine (×2 points):",
+        "captain_set":      "⭐ Capitaine: <b>{name}</b>",
+        "squad_confirmed":  "✅ <b>Équipe confirmée!</b> Bonne chance! 🍀",
+        "deadline_passed":  "❌ Date limite dépassée.",
+        "no_squad":         "❌ Vous n'avez pas encore d'équipe.",
+        "transfers_closed": "🔒 Fenêtre de transferts fermée.",
+        "transfers_open":   "🔓 Fenêtre ouverte jusqu'à {close}.",
+        "free_transfers":   "Transferts gratuits: {n}",
+        "transfer_done":    "✅ Transfert: {out} → {in}",
+        "stats_title":      "📊 <b>Mes Stats</b>\n🏆 Total: <b>{total} pts</b>\n",
+        "results_title":    "🏟 <b>Résultats Récents</b>",
+        "lb_overall":       "🏆 <b>Classement Général</b>",
+        "lb_gameweek":      "📅 <b>Classement Journée {n}</b>",
+        "lb_entry":         "{rank}. {username} — {pts} pts",
+        "lb_btn_overall":   "🏆 Général",
+        "lb_btn_gw":        "📅 Cette Journée",
+        "rules_title":      "📖 <b>Système de Points</b>",
+        "rules_text":       "Voir version EN pour les règles complètes.",
+        "notif_result":     "⚽ <b>Résultat</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 Points mis à jour!",
+        "notif_gw_summary": "📊 <b>Journée {n} terminée!</b>\nVos points: <b>{pts}</b>",
+        "notif_deadline_24h":"⏰ <b>24 heures restantes!</b>\nConfirmez avant: {deadline}",
+        "notif_deadline_1h": "🚨 <b>1 heure restante!</b>\nConfirmez MAINTENANT: {deadline}",
+        "notif_window_open": "🔓 <b>Fenêtre ouverte!</b>\nFaites vos transferts avant {close}",
+        "notif_window_close":"🔒 <b>Fenêtre fermée.</b>",
+        "no_captain":       "❌ Vous devez choisir un capitaine.",
+        "over_budget":      "❌ Budget dépassé!",
+        "no_stats":         "Aucun point encore.",
+        "no_results":       "Aucun résultat.",
+        "already_confirmed":"✅ Équipe déjà confirmée.",
+        "squad_summary":    "📋 <b>Votre Équipe</b>\n\n{lineup}\n\n💰 Dépensé: {spent}\n⭐ Capitaine: {captain}",
+        "pick_remove":      "Sélectionnez un joueur à retirer:",
+        "pick_add":         "Sélectionnez le remplaçant ({pos}):",
+        "extra_cost":       "⚠️ Ce transfert coûte {pts} pts.",
+        "no_transfers":     "❌ Aucun transfert disponible.",
+        "player_detail":    "📊 <b>{name}</b> — {team}\n💰 {price} | Total: <b>{total} pts</b>\n",
     },
-
     "es": {
-        "lang_flag": "🇪🇸",
-        "ask_username": "👋 ¡Bienvenido a <b>Rolletto Fantasy Football</b>!\n\nIngresa tu <b>nombre de usuario de Rolletto</b>:",
-        "checking": "🔍 Verificando tu cuenta...",
-        "not_found": (
-            "❌ No encontramos tu cuenta de Rolletto.\n\n"
-            "Regístrate en Rolletto y usa <b>@rollettopromobot</b> para recibir giros gratis.\n\n"
-            "👉 <a href='{url}'>Regístrate aquí</a>\n\n"
-            "Una vez registrado, usa /check para volver a intentarlo."
-        ),
-        "still_not_found": "⏳ Cuenta aún no encontrada. Nuestro equipo te dará acceso en <b>24 horas</b>.",
-        "found_welcome": "✅ ¡Cuenta verificada! Bienvenido, <b>{username}</b>!\n\nElige tu idioma:",
-        "choose_lang": "🌍 Elige tu idioma:",
-        "rules_title": "📋 <b>REGLAS ROLLETTO FANTASY</b>\n\n[Versión en español — traducción profesional pendiente]",
-        "accept_btn": "✅ Aceptar y Continuar",
-        "home_title": "🏠 <b>INICIO</b>\n\n💰 Presupuesto: <b>{budget}</b>\n👥 Plantilla: <b>{filled}/15</b>\n⭐ Capitán: <b>{captain}</b>\n📊 Puntos: <b>{points}</b>",
-        "choose_formation": "⚽ Elige tu formación:",
-        "formation_set": "✅ Formación <b>{f}</b> seleccionada!",
-        "squad_view": "📋 <b>TU PLANTILLA</b> — {formation}\n💰 Presupuesto restante: <b>{budget}</b>\n\n{visual}\n\n🔵 Toca una posición.",
-        "choose_position": "Selecciona una posición:",
-        "pick_player": "👇 Elige un <b>{pos}</b> (Pág {page}/{total}):",
-        "no_budget": "❌ ¡Presupuesto insuficiente!",
-        "already_in": "❌ ¡Este jugador ya está en tu plantilla!",
-        "confirm_player": "➕ ¿Añadir a <b>{name}</b> {nation} ({team}) — {price}?\n\n💰 Restante: <b>{remaining}</b>",
-        "yes_btn": "✅ Sí, añadir",
-        "no_btn": "❌ Cancelar",
-        "player_added": "✅ ¡<b>{name}</b> añadido!",
-        "choose_captain": "⭐ Elige tu capitán:",
-        "captain_set": "⭐ ¡<b>{name}</b> es el capitán!",
-        "confirm_submit": "🚀 <b>¿Confirmar plantilla?</b>\n\nFormación: {formation}\nCapitán: {captain}\nPresupuesto usado: {spent}",
-        "squad_submitted": "🎉 ¡Plantilla enviada! ¡Buena suerte! 🏆",
-        "squad_incomplete": "⚠️ Completa los 15 huecos antes de enviar.",
-        "no_captain": "⚠️ Elige un capitán antes de enviar.",
-        "transfer_menu": "🔄 <b>TRASPASOS</b>\n\nTraspasos gratuitos: <b>{free}</b>\nCosto extra: -4 pts\n\nSelecciona un jugador para traspasar:",
-        "select_player_in": "👇 Elige un sustituto <b>{pos}</b>:",
-        "confirm_transfer": "🔄 ¿Traspasar <b>{out}</b> → <b>{in}</b>?\n\n{cost_msg}",
-        "transfer_free_cost": "✅ Traspaso gratuito.",
-        "transfer_points_cost": "⚠️ Este traspaso cuesta <b>-4 puntos</b>.",
-        "transfer_done": "✅ ¡Traspaso completado!",
-        "back_home": "🏠 Inicio",
-        "transfers_btn": "🔄 Traspasos",
-        "my_squad_btn": "📋 Mi Plantilla",
-        "leaderboard_btn": "📊 Clasificación",
-        "stats_btn":      "📊 Estadísticas",
-        "results_btn":    "🏟 Resultados",
-        "rules_btn":       "📋 Reglas",
-        "admin_btn": "⚙️ Admin",
-        "leaderboard_empty": "📊 Clasificación vacía. ¡Sé el primero!",
-        "leaderboard_title": "📊 <b>CLASIFICACIÓN — Top 10</b>\n\n",
-        "admin_menu": "⚙️ <b>PANEL DE ADMIN</b>",
-        "admin_send_msg": "📨 Mensaje a Usuario",
-        "admin_broadcast": "📢 Difusión",
-        "admin_pending": "⏳ Usuarios Pendientes",
-        "admin_get_id": "Introduce el ID de Telegram del usuario:",
-        "admin_get_msg": "Envía el mensaje a reenviar:",
-        "admin_get_bc_ids": "Introduce los IDs separados por comas, o escribe <b>ALL</b>:",
-        "admin_confirm_send": "¿Enviar a <b>{n} usuario(s)</b>?",
-        "admin_send_done": "✅ Mensaje enviado a {n} usuario(s).",
-        "admin_user_not_found": "❌ Usuario no encontrado.",
-        "promo_get_id": "Introduce el ID de Telegram:",
-        "promo_get_code": "Introduce el código promo:",
-        "promo_confirm": "¿Enviar el código <b>{code}</b> al usuario <b>{uid}</b>?",
-        "promo_sent": "🎁 Tu código promo exclusivo de Rolletto: <b>{code}</b>",
-        "promo_done": "✅ Código promo enviado.",
-        "pending_list": "⏳ <b>Solicitudes pendientes:</b>\n\n{list}",
-        "pending_empty": "✅ No hay solicitudes pendientes.",
-        "admin_notify_pending": "🔔 <b>Nueva solicitud de acceso</b>\n\nTelegram ID: <code>{tg_id}</code>\n@{tg_username}\nRolletto: <b>{rolletto}</b>\nHora: {time}",
+        "back_home":        "🏠 Inicio",
+        "back":             "◀️ Atrás",
+        "cancel":           "❌ Cancelar",
+        "confirm":          "✅ Confirmar",
+        "welcome":          "🌍 ¡Bienvenido! Elige tu idioma:",
+        "enter_username":   "👤 Ingresa tu nombre de usuario de Rolletto:",
+        "verifying":        "🔄 Verificando...",
+        "verified":         "✅ ¡Bienvenido, {username}! Estás registrado.",
+        "not_found":        "❌ Usuario no encontrado. Regístrate en {url}.",
+        "already_reg":      "✅ Ya estás registrado.",
+        "home_title":       "🏆 <b>Rolletto Fantasy</b>\n\n{status}",
+        "btn_squad":        "📋 Mi Equipo",
+        "btn_transfers":    "🔄 Fichajes",
+        "btn_confirm":      "✅ Confirmar Equipo",
+        "btn_stats":        "📊 Mis Stats",
+        "btn_results":      "🏟 Resultados",
+        "btn_leaderboard":  "🏆 Clasificación",
+        "btn_rules":        "📖 Reglas",
+        "build_squad":      "⚽ <b>Crear Equipo</b>\n\nElige tu formación:",
+        "pick_formation":   "Elige formación:",
+        "budget_left":      "💰 Presupuesto restante: {budget}",
+        "pick_pos":         "Elige tu <b>{pos}</b> ({n} restantes):",
+        "squad_full":       "✅ ¡Equipo completo! Elige el capitán:",
+        "pick_captain":     "⭐ Elige el capitán (×2 puntos):",
+        "captain_set":      "⭐ Capitán: <b>{name}</b>",
+        "squad_confirmed":  "✅ <b>¡Equipo confirmado!</b> ¡Buena suerte! 🍀",
+        "deadline_passed":  "❌ Plazo expirado.",
+        "no_squad":         "❌ Todavía no tienes equipo.",
+        "transfers_closed": "🔒 Ventana de fichajes cerrada.",
+        "transfers_open":   "🔓 Ventana abierta hasta {close}.",
+        "free_transfers":   "Fichajes gratuitos: {n}",
+        "transfer_done":    "✅ Fichaje: {out} → {in}",
+        "stats_title":      "📊 <b>Mis Stats</b>\n🏆 Total: <b>{total} pts</b>\n",
+        "results_title":    "🏟 <b>Resultados Recientes</b>",
+        "lb_overall":       "🏆 <b>Clasificación General</b>",
+        "lb_gameweek":      "📅 <b>Clasificación Jornada {n}</b>",
+        "lb_entry":         "{rank}. {username} — {pts} pts",
+        "lb_btn_overall":   "🏆 General",
+        "lb_btn_gw":        "📅 Esta Jornada",
+        "rules_title":      "📖 <b>Sistema de Puntos</b>",
+        "rules_text":       "Ver versión EN para las reglas completas.",
+        "notif_result":     "⚽ <b>Resultado</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 ¡Puntos actualizados!",
+        "notif_gw_summary": "📊 <b>¡Jornada {n} terminada!</b>\nTus puntos: <b>{pts}</b>",
+        "notif_deadline_24h":"⏰ <b>¡24 horas restantes!</b>\nConfirma antes de: {deadline}",
+        "notif_deadline_1h": "🚨 <b>¡1 hora restante!</b>\nConfirma AHORA: {deadline}",
+        "notif_window_open": "🔓 <b>¡Ventana abierta!</b>\nHaz tus fichajes antes de {close}",
+        "notif_window_close":"🔒 <b>Ventana cerrada.</b>",
+        "no_captain":       "❌ Debes elegir un capitán.",
+        "over_budget":      "❌ ¡Presupuesto excedido!",
+        "no_stats":         "Aún no hay puntos.",
+        "no_results":       "Sin resultados.",
+        "already_confirmed":"✅ Equipo ya confirmado.",
+        "squad_summary":    "📋 <b>Tu Equipo</b>\n\n{lineup}\n\n💰 Gastado: {spent}\n⭐ Capitán: {captain}",
+        "pick_remove":      "Selecciona jugador a eliminar:",
+        "pick_add":         "Selecciona sustituto ({pos}):",
+        "extra_cost":       "⚠️ Este fichaje cuesta {pts} pts.",
+        "no_transfers":     "❌ No hay fichajes disponibles.",
+        "player_detail":    "📊 <b>{name}</b> — {team}\n💰 {price} | Total: <b>{total} pts</b>\n",
     },
 }
 
 
 def t(lang: str, key: str, **kwargs) -> str:
-    """Get translated string, fallback to English."""
-    text = T.get(lang, T["en"]).get(key) or T["en"].get(key, f"[{key}]")
+    """Get translated string, fallback to EN."""
+    lang = lang if lang in STRINGS else "en"
+    text = STRINGS[lang].get(key) or STRINGS["en"].get(key) or key
     if kwargs:
-        text = text.format(**kwargs)
+        try:
+            text = text.format(**kwargs)
+        except Exception:
+            pass
     return text

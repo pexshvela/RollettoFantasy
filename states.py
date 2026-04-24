@@ -1,42 +1,46 @@
+"""states.py — All FSM states."""
 from aiogram.fsm.state import State, StatesGroup
 
-class Registration(StatesGroup):
-    waiting_username = State()
-    waiting_check    = State()
 
-class Setup(StatesGroup):
-    selecting_language = State()
-    reading_rules      = State()
+class Registration(StatesGroup):
+    language    = State()
+    username    = State()
+
 
 class Squad(StatesGroup):
-    home               = State()
-    selecting_formation = State()
-    viewing_squad      = State()
-    selecting_position = State()
-    selecting_player   = State()
-    confirming_player  = State()
-    selecting_captain  = State()
-    confirming_submit  = State()
+    formation   = State()
+    picking_gk  = State()
+    picking_def = State()
+    picking_mf  = State()
+    picking_fw  = State()
+    picking_bench = State()
+    captain     = State()
+    review      = State()
 
-class Transfers(StatesGroup):
-    menu               = State()
-    select_player_out  = State()
-    select_player_in   = State()
-    confirming         = State()
 
-class Admin(StatesGroup):
-    menu               = State()
-    get_target_id      = State()
-    get_message        = State()
-    get_broadcast_ids  = State()
-    get_broadcast_msg  = State()
-    confirming_send    = State()
-    get_promo_id       = State()
-    get_promo_code     = State()
-    get_reset_id       = State()
-    reset_menu         = State()
+class Transfer(StatesGroup):
+    pick_out    = State()
+    pick_in     = State()
+    confirm     = State()
+
 
 class Stats(StatesGroup):
-    viewing = State()
-    results = State()
-    player_detail = State()
+    viewing     = State()
+    player      = State()
+
+
+class Results(StatesGroup):
+    viewing     = State()
+    match       = State()
+
+
+class Leaderboard(StatesGroup):
+    viewing     = State()
+
+
+class Admin(StatesGroup):
+    main        = State()
+    broadcast   = State()
+    send_user   = State()
+    reset_menu  = State()
+    reset_user  = State()

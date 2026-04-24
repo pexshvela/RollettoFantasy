@@ -1,446 +1,353 @@
+"""
+squad.py — Squad building, captain selection, confirmation.
+Formation → pick GK → pick DEFs → pick MFs → pick FWs → pick bench → captain → confirm
+"""
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramBadRequest
 
-import config
 import sheets
+import players as pl_module
+from players import get_player, get_players_by_position, fmt_price
 from states import Squad
 from translations import t
-from players import get_player, fmt_price, get_by_position
-from inline import (
-    formation_keyboard, squad_keyboard, player_list_keyboard,
-    confirm_player_keyboard, captain_keyboard, confirm_submit_keyboard,
-    home_keyboard, slot_action_keyboard,
+from helpers import (
+    get_lang, get_formation_slots, get_starter_slots,
+    get_bench_slots, get_all_slots, slot_to_position,
+    build_squad_visual, calc_squad_cost, squad_is_complete, FORMATIONS
 )
-from helpers import build_squad_visual, build_home_text, get_lang, count_squad_filled
+from inline import (
+    home_keyboard, formation_keyboard, player_list_keyboard,
+    captain_keyboard, squad_review_keyboard, back_home
+)
+import config
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-
-def _safe_budget(user):
-    raw = (user or {}).get("budget_remaining", config.TOTAL_BUDGET)
-    try:
-        return int(float(raw or config.TOTAL_BUDGET))
-    except (ValueError, TypeError):
-        return config.TOTAL_BUDGET
+POS_ORDER  = ["GK", "DEF", "MF", "FW"]
+BENCH_POSITIONS = ["GK", "DEF", "MF", "FW"]
 
 
-def _merge_captain(user, squad_data):
-    """Inject captain from user record into squad_data for display only — never saved."""
-    if squad_data is None:
-        squad_data = {}
-    captain = (user or {}).get("captain", "")
-    if captain:
-        squad_data = dict(squad_data)  # copy so we don't pollute the original
-        squad_data["captain"] = captain
-    return squad_data
-
-
-async def _show_squad(callback, user, squad_data, lang, state):
-    """Central render helper for squad view."""
-    formation = (user or {}).get("formation", "4-3-3") or "4-3-3"
-    budget = _safe_budget(user)
-    display_squad = _merge_captain(user, squad_data or {})
-    visual = build_squad_visual(formation, display_squad)
-    text = t(lang, "squad_view", formation=formation,
-             budget=fmt_price(budget), visual=visual)
-    if len(text) > 4000:
-        text = text[:4000] + "…"
-    try:
-        await callback.message.edit_text(
-            text, parse_mode="HTML",
-            reply_markup=squad_keyboard(lang, formation, display_squad),
-        )
-    except TelegramBadRequest as e:
-        err = str(e)
-        if "message is not modified" in err:
-            pass
-        elif "MESSAGE_TOO_LONG" in err:
-            fallback = t(lang, "squad_view", formation=formation,
-                         budget=fmt_price(budget), visual="[tap a slot to see]")
-            await callback.message.edit_text(
-                fallback, parse_mode="HTML",
-                reply_markup=squad_keyboard(lang, formation, display_squad),
-            )
-        else:
-            raise
-    await state.set_state(Squad.viewing_squad)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "home:formation")
-async def show_formations(callback: CallbackQuery, state: FSMContext):
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    await callback.message.edit_text(
-        t(lang, "choose_formation"), parse_mode="HTML",
-        reply_markup=formation_keyboard(lang),
-    )
-    await state.set_state(Squad.selecting_formation)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("formation:"), Squad.selecting_formation)
-async def set_formation(callback: CallbackQuery, state: FSMContext):
-    formation = callback.data.split(":")[1]
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    squad_data["formation"] = formation
-    await sheets.update_user(callback.from_user.id, formation=formation)
-    await sheets.save_squad(callback.from_user.id, squad_data)
-    user = await sheets.get_user(callback.from_user.id)
-    await _show_squad(callback, user, squad_data, lang, state)
-
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "home:squad")
-async def view_squad(callback: CallbackQuery, state: FSMContext):
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id)
-    await _show_squad(callback, user, squad_data, lang, state)
-
-
-@router.callback_query(F.data == "squad:view")
-async def squad_view_direct(callback: CallbackQuery, state: FSMContext):
-    await view_squad(callback, state)
-
-
-@router.callback_query(F.data.startswith("slot:"))
-async def tap_slot(callback: CallbackQuery, state: FSMContext):
-    _, position, slot = callback.data.split(":", 2)
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    existing_pid = squad_data.get(slot)
-
-    if existing_pid:
-        # Slot filled → show Replace / Remove menu
-        p = get_player(existing_pid)
-        name = p["name"] if p else "this player"
-        await callback.message.edit_text(
-            f"👤 <b>{name}</b>\n\nWhat do you want to do?",
-            parse_mode="HTML",
-            reply_markup=slot_action_keyboard(lang, position, slot, existing_pid),
-        )
-        await state.update_data(current_slot=slot, current_position=position)
-        await state.set_state(Squad.selecting_player)
-        await callback.answer()
-        return
-
-    # Slot empty
-    await _open_player_list(callback, state, position, slot, squad_data, lang)
-
-
-@router.callback_query(F.data.startswith("slot_replace:"))
-async def slot_replace(callback: CallbackQuery, state: FSMContext):
-    _, position, slot = callback.data.split(":", 2)
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    await state.update_data(current_slot=slot, current_position=position,
-                            replacing_pid=squad_data.get(slot))
-    await _open_player_list(callback, state, position, slot, squad_data, lang,
-                            exclude_current=True)
-
-
-@router.callback_query(F.data.startswith("slot_remove:"))
-async def slot_remove(callback: CallbackQuery, state: FSMContext):
-    """Remove player from slot, refund budget, update DB and cache properly."""
-    slot = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-
-    # Always fetch fresh squad from cache/DB
-    squad_data = await sheets.get_squad(uid) or {}
+async def show_squad(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
+    squad = await sheets.get_squad(uid)
 
-    pid = squad_data.get(slot)
-    if not pid:
-        # Already empty — just re-render
-        await _show_squad(callback, user, squad_data, lang, state)
-        return
-
-    p = get_player(pid)
-    budget = _safe_budget(user)
-    if p:
-        budget += p["price"]
-
-    # CRITICAL: set to "" (not pop) so Supabase clears the column
-    squad_data[slot] = ""
-
-    # Clear captain if this player was captain
-    captain = (user or {}).get("captain", "")
-    if captain == pid:
-        await sheets.update_user(uid, captain="", budget_remaining=budget)
-    else:
-        await sheets.update_user(uid, budget_remaining=budget)
-
-    await sheets.save_squad(uid, squad_data)
-
-    # Get refreshed user (budget updated in cache by update_user)
-    user = await sheets.get_user(uid)
-    # Remove the now-empty key for clean display
-    display_squad = {k: v for k, v in squad_data.items() if v}
-
-    await _show_squad(callback, user, display_squad, lang, state)
-
-
-async def _open_player_list(callback, state, position, slot, squad_data, lang,
-                             exclude_current=False):
-    """Show player selection list, optionally including the current slot's player."""
-    if position == "ANY":
-        kb = InlineKeyboardBuilder()
-        for pos, emoji in [("GK", "🧤"), ("DEF", "🔵"), ("MF", "🟡"), ("FW", "🔴")]:
-            kb.button(text=f"{emoji} {pos}", callback_data=f"subpos:{pos}:{slot}")
-        kb.button(text="◀️ Back", callback_data="squad:view")
-        kb.adjust(2)
+    if squad and squad_is_complete(squad, user.get("formation", "4-3-3")):
+        # Show existing squad
+        formation  = user.get("formation", "4-3-3")
+        captain_id = user.get("captain", "")
+        pts        = await sheets.get_squad_points_summary(uid)
+        visual     = build_squad_visual(squad, formation, captain_id, pts)
         await callback.message.edit_text(
-            "👇 Choose position for this sub:", reply_markup=kb.as_markup()
+            f"📋 <b>My Squad</b>\n\n{visual}",
+            parse_mode="HTML",
+            reply_markup=squad_review_keyboard(lang, confirmed=user.get("confirmed", False))
         )
-        await state.set_state(Squad.selecting_player)
-        await callback.answer()
-        return
+    else:
+        # Build new squad
+        await callback.message.edit_text(
+            t(lang, "build_squad"),
+            parse_mode="HTML",
+            reply_markup=formation_keyboard(lang)
+        )
+        await state.set_state(Squad.formation)
 
-    all_p = get_by_position(position)
-    # Build taken set — exclude formation strings and empty values
-    taken = {v for v in squad_data.values()
-             if isinstance(v, str) and v and not _is_formation(v)}
-    if exclude_current:
-        taken.discard(squad_data.get(slot))  # allow replacing with same player
-    available = [p for p in all_p if p["id"] not in taken]
-    total_pages = max(1, -(-len(available) // 8))
-
-    await callback.message.edit_text(
-        t(lang, "pick_player", pos=position, page=1, total=total_pages),
-        parse_mode="HTML",
-        reply_markup=player_list_keyboard(lang, position, slot, 0, squad_data),
-    )
-    await state.set_state(Squad.selecting_player)
     await callback.answer()
 
 
-def _is_formation(val: str) -> bool:
-    """Check if a string looks like a formation (e.g. '4-3-3')."""
-    return bool(val and val.count("-") == 2 and all(c.isdigit() or c == "-" for c in val))
+# ── Formation selection ───────────────────────────────────────────────────────
+
+@router.callback_query(Squad.formation, F.data.startswith("formation:"))
+async def pick_formation(callback: CallbackQuery, state: FSMContext):
+    uid       = callback.from_user.id
+    user      = await sheets.get_user(uid)
+    lang      = await get_lang(uid, user)
+    formation = callback.data.split(":")[1]
+
+    await state.update_data(
+        formation=formation,
+        squad={},
+        picking_pos="GK",
+        picking_index=1,
+        bench_index=0,
+    )
+    await sheets.update_user(uid, formation=formation)
+
+    await _show_player_picker(callback.message, lang, formation, "GK", 1, {}, state)
+    await state.set_state(Squad.picking_gk)
+    await callback.answer()
 
 
-@router.callback_query(F.data.startswith("subpos:"))
-async def select_sub_position(callback: CallbackQuery, state: FSMContext):
-    _, position, slot = callback.data.split(":", 2)
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    await state.update_data(current_slot=slot, current_position=position)
-    await _open_player_list(callback, state, position, slot, squad_data, lang)
+# ── Player picking ────────────────────────────────────────────────────────────
+
+async def _show_player_picker(message, lang: str, formation: str,
+                               pos: str, slot_num: int,
+                               current_squad: dict, state: FSMContext, page: int = 0):
+    all_p = get_players_by_position(pos)
+    budget_used = calc_squad_cost(current_squad)
+    budget_left = config.TOTAL_BUDGET - budget_used
+
+    # Filter by budget
+    affordable = [p for p in all_p if p["price"] <= budget_left
+                  and p["id"] not in current_squad.values()]
+
+    slots_def = get_formation_slots(formation)
+    total_in_pos = 1 if pos == "GK" else slots_def.get(pos, 1)
+
+    title = (f"🔢 Slot {slot_num}/{total_in_pos} — {pos}\n"
+             f"💰 Budget left: {fmt_price(budget_left)}\n"
+             f"Pick your <b>{pos}</b>:")
+
+    kb = player_list_keyboard(affordable, pos, lang, page)
+    try:
+        await message.edit_text(title, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await message.answer(title, parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("page:"))
 async def paginate_players(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":")
-    position, slot, page = parts[1], parts[2], int(parts[3])
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    all_p = get_by_position(position)
-    taken = {v for v in squad_data.values()
-             if isinstance(v, str) and v and not _is_formation(v)}
-    available = [p for p in all_p if p["id"] not in taken]
-    total_pages = max(1, -(-len(available) // 8))
-    try:
-        await callback.message.edit_text(
-            t(lang, "pick_player", pos=position, page=page + 1, total=total_pages),
-            parse_mode="HTML",
-            reply_markup=player_list_keyboard(lang, position, slot, page, squad_data),
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
+    _, pos, page_str = callback.data.split(":")
+    page = int(page_str)
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+    data = await state.get_data()
+
+    squad     = data.get("squad", {})
+    formation = data.get("formation", "4-3-3")
+    slot_num  = data.get("picking_index", 1)
+
+    await _show_player_picker(callback.message, lang, formation, pos, slot_num, squad, state, page)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("pick:"))
 async def pick_player(callback: CallbackQuery, state: FSMContext):
-    _, player_id, slot = callback.data.split(":", 2)
-    uid = callback.from_user.id
+    _, pos, pid = callback.data.split(":")
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
-    squad_data = await sheets.get_squad(uid) or {}
-    p = get_player(player_id)
-    if not p:
-        await callback.answer("Player not found.", show_alert=True)
-        return
+    data = await state.get_data()
 
-    budget = _safe_budget(user)
-    old_pid = squad_data.get(slot)
-    # Calculate effective budget (refund old player if replacing)
-    effective_budget = budget
-    if old_pid and old_pid != player_id:
-        old_p = get_player(old_pid)
-        if old_p:
-            effective_budget += old_p["price"]
+    squad     = data.get("squad", {}).copy()
+    formation = data.get("formation", "4-3-3")
+    slots_def = get_formation_slots(formation)
 
-    if p["price"] > effective_budget:
-        await callback.answer(t(lang, "no_budget"), show_alert=True)
-        return
+    # Determine current slot name
+    bench_idx = data.get("bench_index", 0)
+    is_bench  = data.get("picking_bench", False)
 
-    # Check not already picked in a different slot
-    taken = {v for v in squad_data.values() if isinstance(v, str) and v and not _is_formation(v)}
-    taken.discard(old_pid)  # allow picking same player as replacement
-    if player_id in taken:
-        await callback.answer(t(lang, "already_in"), show_alert=True)
-        return
+    if is_bench:
+        bench_positions = BENCH_POSITIONS
+        bench_pos = bench_positions[bench_idx]
+        slot_name = f"bench_{bench_pos.lower()}"
+        squad[slot_name] = pid
+        bench_idx += 1
 
-    remaining = effective_budget - p["price"]
-    old_p = get_player(old_pid) if old_pid else None
-    swap_note = f"\n\n🔄 <i>Replacing: {old_p['name']}</i>" if old_p else ""
+        if bench_idx < len(bench_positions):
+            await state.update_data(squad=squad, bench_index=bench_idx)
+            next_pos = bench_positions[bench_idx]
+            await _show_player_picker(callback.message, lang, formation, next_pos, bench_idx + 1, squad, state)
+        else:
+            # All bench filled → pick captain
+            await state.update_data(squad=squad)
+            await _show_captain_picker(callback.message, lang, squad, formation)
+            await state.set_state(Squad.captain)
+    else:
+        # Starter picking
+        idx = data.get("picking_index", 1)
+        if pos == "GK":
+            slot_name = "gk1"
+        else:
+            slot_name = f"{pos.lower()}{idx}"
+
+        squad[slot_name] = pid
+        idx += 1
+
+        # Determine next position
+        total_in_pos = slots_def.get(pos, 1)
+        if pos == "GK":
+            total_in_pos = 1
+
+        if idx <= total_in_pos:
+            await state.update_data(squad=squad, picking_index=idx)
+            await _show_player_picker(callback.message, lang, formation, pos, idx, squad, state)
+        else:
+            # Move to next position
+            pos_order = ["GK", "DEF", "MF", "FW"]
+            current_idx = pos_order.index(pos)
+            next_positions = [p for p in pos_order[current_idx + 1:]
+                              if slots_def.get(p, 0 if p != "GK" else 1) > 0]
+
+            if next_positions:
+                next_pos = next_positions[0]
+                await state.update_data(squad=squad, picking_pos=next_pos, picking_index=1)
+                await _show_player_picker(callback.message, lang, formation, next_pos, 1, squad, state)
+                # Update FSM state
+                state_map = {"DEF": Squad.picking_def, "MF": Squad.picking_mf, "FW": Squad.picking_fw}
+                await state.set_state(state_map.get(next_pos, Squad.picking_fw))
+            else:
+                # All starters picked — now bench
+                await state.update_data(squad=squad, picking_bench=True, bench_index=0)
+                first_bench_pos = BENCH_POSITIONS[0]
+                await _show_player_picker(callback.message, lang, formation, first_bench_pos, 1, squad, state)
+                await state.set_state(Squad.picking_bench)
+
+    await callback.answer()
+
+
+# Register pick handler for all squad states
+for _state in [Squad.picking_gk, Squad.picking_def, Squad.picking_mf,
+               Squad.picking_fw, Squad.picking_bench]:
+    router.callback_query.register(pick_player, F.data.startswith("pick:"), _state)
+
+
+# ── Captain selection ─────────────────────────────────────────────────────────
+
+async def _show_captain_picker(message, lang: str, squad: dict, formation: str):
+    kb = captain_keyboard(squad, formation, lang)
+    try:
+        await message.edit_text(t(lang, "pick_captain"), parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await message.answer(t(lang, "pick_captain"), parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(Squad.captain, F.data.startswith("captain:"))
+async def pick_captain(callback: CallbackQuery, state: FSMContext):
+    pid  = callback.data.split(":")[1]
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+    data = await state.get_data()
+
+    squad     = data.get("squad", {})
+    formation = data.get("formation", "4-3-3")
+    p = get_player(pid)
+
+    await sheets.update_user(uid, captain=pid)
+    await sheets.save_squad(uid, {**squad, "formation": formation})
+
+    visual = build_squad_visual(squad, formation, pid)
+    kb = squad_review_keyboard(lang, confirmed=False)
 
     await callback.message.edit_text(
-        t(lang, "confirm_player", name=p["name"], nation=p["nation"], team=p["team"],
-          price=fmt_price(p["price"]), remaining=fmt_price(remaining)) + swap_note,
+        f"✅ Captain set: <b>{p['name'] if p else pid}</b>\n\n📋 <b>Squad Review</b>\n\n{visual}",
         parse_mode="HTML",
-        reply_markup=confirm_player_keyboard(lang, player_id, slot),
+        reply_markup=kb
     )
-    await state.set_state(Squad.confirming_player)
+    await state.set_state(Squad.review)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("confirm_player:"), Squad.confirming_player)
-async def confirm_player(callback: CallbackQuery, state: FSMContext):
-    _, player_id, slot = callback.data.split(":", 2)
-    uid = callback.from_user.id
+# ── Squad confirm ─────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "squad:confirm")
+async def confirm_squad(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
-    # Re-fetch squad to avoid stale data
-    squad_data = await sheets.get_squad(uid) or {}
-    p = get_player(player_id)
-    if not p:
-        await callback.answer("Error.", show_alert=True)
-        return
 
-    budget = _safe_budget(user)
-    old_pid = squad_data.get(slot)
-    if old_pid:
-        old_p = get_player(old_pid)
-        if old_p:
-            budget += old_p["price"]
-        # If old player was captain, clear captain
-        if (user or {}).get("captain") == old_pid:
-            await sheets.update_user(uid, captain="")
-
-    budget -= p["price"]
-    squad_data[slot] = player_id
-
-    await sheets.save_squad(uid, squad_data)
-    await sheets.update_user(uid, budget_remaining=budget)
-
-    user = await sheets.get_user(uid)
-    await _show_squad(callback, user, squad_data, lang, state)
-    try:
-        await callback.answer(t(lang, "player_added", name=p["name"]))
-    except Exception:
-        pass
-
-
-@router.callback_query(F.data == "squad:captain")
-async def choose_captain(callback: CallbackQuery, state: FSMContext):
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    squad_data = await sheets.get_squad(callback.from_user.id) or {}
-    formation = (user or {}).get("formation", "4-3-3") or "4-3-3"
-
-    # Check squad is full before allowing captain selection
-    filled = count_squad_filled(squad_data, formation)
-    if filled < 15:
-        await callback.answer(t(lang, "squad_incomplete"), show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        t(lang, "choose_captain"), parse_mode="HTML",
-        reply_markup=captain_keyboard(lang, squad_data, formation),
-    )
-    await state.set_state(Squad.selecting_captain)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("captain:"), Squad.selecting_captain)
-async def set_captain(callback: CallbackQuery, state: FSMContext):
-    player_id = callback.data.split(":")[1]
-    uid = callback.from_user.id
-    p = get_player(player_id)
-    await sheets.update_user(uid, captain=player_id)
-    # Get fresh user so captain shows correctly
-    user = await sheets.get_user(uid)
-    squad_data = await sheets.get_squad(uid) or {}
-    await _show_squad(callback, user, squad_data, lang := await get_lang(uid, user), state)
-    try:
-        await callback.answer(t(lang, "captain_set", name=p["name"] if p else ""))
-    except Exception:
-        pass
-
-
-@router.callback_query(F.data == "squad:submit")
-async def submit_squad_prompt(callback: CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
-    user = await sheets.get_user(uid)
-    lang = await get_lang(uid, user)
-    squad_data = await sheets.get_squad(uid) or {}
-    formation = (user or {}).get("formation", "4-3-3") or "4-3-3"
-    filled = count_squad_filled(squad_data, formation)
-    if filled < 15:
-        await callback.answer(t(lang, "squad_incomplete"), show_alert=True)
-        return
-    captain_id = (user or {}).get("captain", "")
-    if not captain_id:
+    # Check captain
+    captain = user.get("captain", "")
+    if not captain:
         await callback.answer(t(lang, "no_captain"), show_alert=True)
         return
-    cap = get_player(captain_id)
-    budget_used = config.TOTAL_BUDGET - _safe_budget(user)
+
+    # Check deadline
+    before_deadline = await sheets.is_before_deadline()
+    if not before_deadline:
+        await callback.answer(t(lang, "deadline_passed"), show_alert=True)
+        return
+
+    # Check squad complete
+    squad = await sheets.get_squad(uid)
+    formation = user.get("formation", "4-3-3")
+    if not squad or not squad_is_complete(squad, formation):
+        await callback.answer(t(lang, "no_squad"), show_alert=True)
+        return
+
+    # Get active gameweek
+    gw = await sheets.get_active_gameweek()
+    if not gw:
+        await callback.answer("No active gameweek. Admin needs to set up fixtures first.", show_alert=True)
+        return
+
+    # Save confirmation with squad snapshot
+    await sheets.confirm_squad(uid, gw["id"], squad)
+
     await callback.message.edit_text(
-        t(lang, "confirm_submit", formation=formation,
-          captain=cap["name"] if cap else "N/A", spent=fmt_price(budget_used)),
+        t(lang, "squad_confirmed"),
         parse_mode="HTML",
-        reply_markup=confirm_submit_keyboard(lang),
+        reply_markup=home_keyboard(lang)
     )
-    await state.set_state(Squad.confirming_submit)
+    await state.clear()
     await callback.answer()
 
 
-@router.callback_query(F.data == "submit:confirm", Squad.confirming_submit)
-async def confirm_submit(callback: CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
+@router.callback_query(F.data == "squad:change")
+async def change_player(callback: CallbackQuery, state: FSMContext):
+    """Go back to formation selection to rebuild squad."""
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
-    await sheets.update_user(uid, squad_submitted="yes")
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "deadline_passed"), show_alert=True)
+        return
+
     await callback.message.edit_text(
-        t(lang, "squad_submitted"), parse_mode="HTML",
-        reply_markup=home_keyboard(lang, uid, True, True),
+        t(lang, "build_squad"),
+        parse_mode="HTML",
+        reply_markup=formation_keyboard(lang)
     )
-    await state.set_state(Squad.home)
+    await state.set_state(Squad.formation)
     await callback.answer()
 
 
-@router.callback_query(F.data == "home:leaderboard")
-async def show_leaderboard(callback: CallbackQuery, state: FSMContext):
-    user = await sheets.get_user(callback.from_user.id)
-    lang = await get_lang(callback.from_user.id, user)
-    top = await sheets.get_leaderboard()
-    if not top:
-        text = t(lang, "leaderboard_empty")
-    else:
-        medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-        lines = [t(lang, "leaderboard_title")]
-        for i, row in enumerate(top):
-            lines.append(
-                f"{medals[i]} {row.get('rolletto_username', 'N/A')} — "
-                f"<b>{row.get('total_points', 0)} pts</b>"
-            )
-        text = "\n".join(lines)
-    kb = InlineKeyboardBuilder()
-    kb.button(text=t(lang, "back_home"), callback_data="home:back")
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
+@router.callback_query(F.data == "home:confirm")
+async def home_confirm(callback: CallbackQuery, state: FSMContext):
+    """Confirm button from home — shortcut."""
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    if user.get("confirmed"):
+        await callback.answer(t(lang, "already_confirmed"), show_alert=True)
+        return
+
+    squad = await sheets.get_squad(uid)
+    formation = user.get("formation", "4-3-3")
+
+    if not squad or not squad_is_complete(squad, formation):
+        await callback.answer(t(lang, "no_squad"), show_alert=True)
+        return
+
+    if not user.get("captain"):
+        await callback.answer(t(lang, "no_captain"), show_alert=True)
+        return
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "deadline_passed"), show_alert=True)
+        return
+
+    gw = await sheets.get_active_gameweek()
+    if not gw:
+        await callback.answer("No active gameweek.", show_alert=True)
+        return
+
+    await sheets.confirm_squad(uid, gw["id"], squad)
+    await callback.message.edit_text(
+        t(lang, "squad_confirmed"),
+        parse_mode="HTML",
+        reply_markup=home_keyboard(lang)
+    )
     await callback.answer()

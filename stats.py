@@ -1,18 +1,16 @@
-"""
-stats.py — My Stats and Match Results handlers
-"""
+"""stats.py — My Stats and Match Results views."""
 import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramBadRequest
 
 import sheets
-from states import Stats
+from players import get_player, fmt_price, mask_username
+from states import Stats, Results
 from translations import t
-from players import get_player, fmt_price
-from helpers import get_lang
+from helpers import get_lang, get_starter_slots, POS_EMOJI
+from inline import home_keyboard, results_keyboard, stats_players_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -22,66 +20,40 @@ router = Router()
 
 @router.callback_query(F.data == "home:stats")
 async def show_stats(callback: CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
-    squad = await sheets.get_squad(uid) or {}
 
-    # Get total points per player
-    summary = await sheets.get_squad_points_summary(uid)
-    total_user_pts = sum(summary.values())
+    pts_summary = await sheets.get_squad_points_summary(uid)
+    total       = sum(pts_summary.values())
+    squad       = await sheets.get_squad(uid)
+    formation   = user.get("formation", "4-3-3") if user else "4-3-3"
+    captain_id  = (user or {}).get("captain", "")
 
-    if not summary and not squad:
+    if not squad:
         kb = InlineKeyboardBuilder()
         kb.button(text=t(lang, "back_home"), callback_data="home:back")
         await callback.message.edit_text(
-            "📊 <b>My Stats</b>\n\nNo squad or points yet.",
+            t(lang, "stats_title", total=total) + t(lang, "no_stats"),
             parse_mode="HTML", reply_markup=kb.as_markup()
         )
         await callback.answer()
         return
 
-    captain_id = (user or {}).get("captain", "")
-
-    # Build player list — starting 11 only
-    try:
-        formation = (user or {}).get("formation", "4-3-3") or "4-3-3"
-        parts = formation.split("-")
-        n_def, n_mid, n_fwd = int(parts[0]), int(parts[1]), int(parts[2])
-    except Exception:
-        n_def, n_mid, n_fwd = 4, 3, 3
-
-    starter_slots = (
-        ["gk1"] +
-        [f"def{i}" for i in range(1, n_def + 1)] +
-        [f"mf{i}" for i in range(1, n_mid + 1)] +
-        [f"fw{i}" for i in range(1, n_fwd + 1)]
-    )
-
-    kb = InlineKeyboardBuilder()
-    lines = [f"📊 <b>My Squad Stats</b>\n🏆 Total: <b>{total_user_pts} pts</b>\n"]
-
-    for slot in starter_slots:
+    lines = [t(lang, "stats_title", total=total)]
+    for slot in get_starter_slots(formation):
         pid = squad.get(slot)
-        if not pid:
-            continue
-        p = get_player(pid)
-        if not p:
-            continue
-        pts = summary.get(pid, 0)
+        if not pid: continue
+        p   = get_player(pid)
+        if not p:   continue
+        pts = pts_summary.get(pid, 0)
         cap = " ⭐" if pid == captain_id else ""
-        pos_emoji = {"GK": "🧤", "DEF": "🔵", "MF": "🟡", "FW": "🔴"}.get(p["position"], "⚽")
-        lines.append(f"{pos_emoji} {p['name']}{cap} — <b>{pts} pts</b>")
-        kb.button(
-            text=f"{p['name']}{cap} ({pts} pts)",
-            callback_data=f"stats:player:{pid}"
-        )
-
-    kb.button(text=t(lang, "back_home"), callback_data="home:back")
-    kb.adjust(1)
+        lines.append(f"{POS_EMOJI.get(p['position'],'⚪')} {p['name']}{cap} — <b>{pts} pts</b>")
 
     await callback.message.edit_text(
-        "\n".join(lines), parse_mode="HTML", reply_markup=kb.as_markup()
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=stats_players_keyboard(squad, formation, lang, pts_summary)
     )
     await state.set_state(Stats.viewing)
     await callback.answer()
@@ -89,71 +61,60 @@ async def show_stats(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("stats:player:"))
 async def show_player_stats(callback: CallbackQuery, state: FSMContext):
-    pid = callback.data.split(":", 2)[2]
-    uid = callback.from_user.id
+    pid  = callback.data.split(":", 2)[2]
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
+
     p = get_player(pid)
     if not p:
         await callback.answer("Player not found.", show_alert=True)
         return
 
     history = await sheets.get_player_points_history(uid, pid)
-    captain_id = (user or {}).get("captain", "")
-    is_captain = pid == captain_id
+    total   = sum(r.get("points", 0) for r in history)
+    cap     = pid == (user or {}).get("captain", "")
 
-    total = sum(r.get("points", 0) for r in history)
     lines = [
-        f"{'⭐ ' if is_captain else ''}<b>{p['name']}</b> ({p['team']})\n"
-        f"💰 {fmt_price(p['price'])} | 🏆 <b>{total} pts total</b>\n"
+        t(lang, "player_detail",
+          name=p["name"], team=p["team"],
+          price=fmt_price(p["price"]), total=total),
     ]
 
     if not history:
-        lines.append("No points recorded yet.")
+        lines.append("No match points yet.")
     else:
         for r in history:
             bd = r.get("breakdown") or {}
-            mc = r.get("match_cache") or {}
-            if mc:
-                match_label = (f"{mc.get('home_team','?')} "
-                               f"{mc.get('home_score','?')}-{mc.get('away_score','?')} "
-                               f"{mc.get('away_team','?')}")
-            else:
-                match_label = f"Match {r.get('match_id','?')[:8]}"
-
+            match_label = bd.get("match", f"Match {r.get('match_id','?')[:8]}")
             pts = r.get("points", 0)
             lines.append(f"\n📅 <b>{match_label}</b>")
 
-            def _line(label, val, pts_val):
-                if val and val != 0:
+            def add(label, val, pts_val):
+                if val:
                     sign = "+" if pts_val >= 0 else ""
                     lines.append(f"  {label}: {sign}{pts_val} pts")
 
-            mins = bd.get("minutes_played", 0)
-            app  = bd.get("pts_appearance", 0)
-            if app:
-                mins_label = f"60+ min" if mins >= 60 else f"{mins} min"
-                lines.append(f"  🕐 Played ({mins_label}): +{app} pts")
-            _line("⚽ Goals",            bd.get("goals"),          bd.get("pts_goals", 0))
-            _line("🎯 Assists",          bd.get("assists"),         bd.get("pts_assists", 0))
-            _line("🧱 Clean sheet",      bd.get("clean_sheet"),     bd.get("pts_clean_sheet", 0))
-            _line("🧤 Saves /3",         bd.get("saves"),           bd.get("pts_saves", 0))
-            _line("🛑 Penalty saved",    bd.get("penalty_saved"),   bd.get("pts_pen_saved", 0))
-            _line("📉 Goals conceded /2",bd.get("goals_conceded"),  bd.get("pts_conceded", 0))
-            _line("🎯 Penalty earned",   bd.get("penalty_earned"),  bd.get("pts_pen_earned", 0))
-            _line("❌ Penalty missed",   bd.get("penalty_miss"),    bd.get("pts_pen_miss", 0))
-            _line("⚠️ Pen conceded",     bd.get("penalty_conceded"),bd.get("pts_pen_conceded", 0))
-            _line("🟨 Yellow card",      bd.get("yellow_cards"),    bd.get("pts_yellow", 0))
-            _line("🟥 Red card",         bd.get("red_cards"),       bd.get("pts_red", 0))
-            _line("😬 Own goal",         bd.get("own_goals"),       bd.get("pts_own_goals", 0))
-            _line("🛡 Def. actions /3",  bd.get("def_actions"),     bd.get("pts_def_actions", 0))
-            if bd.get("captain_multiplier", 1) > 1:
+            add("🕐 Played",        bd.get("pts_appearance", 0), bd.get("pts_appearance", 0))
+            add("⚽ Goals",          bd.get("goals", 0),         bd.get("pts_goals", 0))
+            add("🎯 Assists",        bd.get("assists", 0),       bd.get("pts_assists", 0))
+            add("🧱 Clean sheet",    bd.get("clean_sheet"),      bd.get("pts_clean_sheet", 0))
+            add("🧤 Saves /3",       bd.get("saves", 0),         bd.get("pts_saves", 0))
+            add("🛑 Pen saved",      bd.get("penalty_saved", 0), bd.get("pts_pen_saved", 0))
+            add("📉 Conceded /2",    bd.get("goals_conceded", 0),bd.get("pts_conceded", 0))
+            add("🎯 Pen earned",     bd.get("penalty_earned", 0),bd.get("pts_pen_earned", 0))
+            add("❌ Pen missed",     bd.get("penalty_miss", 0),  bd.get("pts_pen_miss", 0))
+            add("🟨 Yellow",         bd.get("yellow_cards", 0),  bd.get("pts_yellow", 0))
+            add("🟥 Red",            bd.get("red_cards", 0),     bd.get("pts_red", 0))
+            add("😬 Own goal",       bd.get("own_goals", 0),     bd.get("pts_own_goals", 0))
+            add("🛡 Def acts /3",    bd.get("def_actions", 0),   bd.get("pts_def_actions", 0))
+            if bd.get("captain"):
                 lines.append(f"  ⭐ Captain ×2 (base: {bd.get('base_pts',0)} pts)")
             lines.append(f"  → <b>{pts} pts</b>")
 
     kb = InlineKeyboardBuilder()
     kb.button(text="◀️ Back to Stats", callback_data="home:stats")
-    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.button(text=t(lang, "back_home"),   callback_data="home:back")
     kb.adjust(1)
 
     await callback.message.edit_text(
@@ -162,130 +123,174 @@ async def show_player_stats(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ── Tournament matching helper ───────────────────────────────────────────────
-
-def _tournament_matches(tournament_name: str, keywords: list, t_url: str = "") -> bool:
-    tn = tournament_name.lower()
-    tu = t_url.lower()
-    for kw in keywords:
-        kl = kw.lower()
-        kw_w = kl.replace("-"," ").replace("_"," ")
-        is_cl = ("champions" in kl and "league" in kw_w)
-        if kl in tn or kw_w in tn:
-            if is_cl:
-                if "uefa" in tn or any(x in tu for x in ["europe","uefa"]):
-                    return True
-            else:
-                return True
-    return False
-
-
-# ── Match Results ─────────────────────────────────────────────────────────────
+# ── Results ────────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "home:results")
 async def show_results(callback: CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
+    uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    all_matches = await sheets.get_recent_matches(days=2)
-
-    # Filter by active tournament keywords
-    keywords = await sheets.get_tournament_keywords()
-    if keywords:
-        matches = [
-            m for m in all_matches
-            if _tournament_matches(m.get("tournament") or "", keywords)
-        ]
-    else:
-        matches = all_matches
-
-    kb = InlineKeyboardBuilder()
+    matches = await sheets.get_recent_matches(days=3)
+    # Only show final matches
+    matches = [m for m in matches if m.get("status") in ("final", "in_progress")]
 
     if not matches:
+        kb = InlineKeyboardBuilder()
         kb.button(text=t(lang, "back_home"), callback_data="home:back")
         await callback.message.edit_text(
-            "🏟 <b>Recent Results</b>\n\nNo matches found in the last 2 days.\n\n"
-            "<i>Results appear here after matches finish.</i>",
+            t(lang, "results_title") + "\n\n" + t(lang, "no_results"),
             parse_mode="HTML", reply_markup=kb.as_markup()
         )
         await callback.answer()
         return
 
-    tournament_label = matches[0].get("tournament") or "Recent Matches"
-    lines = [f"🏟 <b>{tournament_label}</b>\n<i>Tap a match for details</i>\n"]
-    for m in matches:
-        status_emoji = "✅" if m["status"] == "final" else "🔴" if m["status"] == "in_progress" else "⏳"
-        date_short = str(m.get("match_date", ""))[-5:]
-        btn_label = (f"{status_emoji} {m['home_team']} "
-                     f"{m['home_score']}-{m['away_score']} "
-                     f"{m['away_team']} ({date_short})")
-        kb.button(text=btn_label, callback_data=f"result:{m['match_id']}")
+    await callback.message.edit_text(
+        t(lang, "results_title") + "\n\n<i>Tap a match for details</i>",
+        parse_mode="HTML",
+        reply_markup=results_keyboard(matches, lang)
+    )
+    await state.set_state(Results.viewing)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("result:"))
 async def show_match_detail(callback: CallbackQuery, state: FSMContext):
     match_id = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    user = await sheets.get_user(uid)
-    lang = await get_lang(uid, user)
+    uid      = callback.from_user.id
+    user     = await sheets.get_user(uid)
+    lang     = await get_lang(uid, user)
 
     m = await sheets.get_cached_match(match_id)
     if not m:
         await callback.answer("Match not found.", show_alert=True)
         return
 
-    import json
-    events = m.get("events") or []
-    if isinstance(events, str):
-        try:
-            events = json.loads(events)
-        except Exception:
-            events = []
-
-    status_word = {"final": "Full Time", "in_progress": "Live", "scheduled": "Upcoming"}.get(
-        m.get("status", ""), m.get("status", "")
-    )
+    events   = m.get("events") or []
+    status_w = {"final":"Full Time","in_progress":"Live","scheduled":"Upcoming"}.get(
+        m.get("status",""), m.get("status",""))
 
     lines = [
         f"⚽ <b>{m['home_team']} {m['home_score']} - {m['away_score']} {m['away_team']}</b>",
-        f"📅 {m.get('match_date', '')} | {status_word}\n",
+        f"📅 {m.get('match_date','')} {m.get('match_time','')} | {status_w}",
+        f"🏆 {m.get('tournament','')} — {m.get('round','')}",
+        "",
     ]
 
-    goals = [e for e in events if e.get("type") == "goal"]
+    goals   = [e for e in events if e.get("type") == "goal"]
     yellows = [e for e in events if e.get("type") == "yellow_card"]
-    reds = [e for e in events if e.get("type") == "red_card"]
+    reds    = [e for e in events if e.get("type") in ("red_card","yellow_then_red")]
+    own     = [e for e in events if e.get("type") == "own_goal"]
 
     if goals:
         lines.append("⚽ <b>Goals:</b>")
         for g in goals:
-            assist_str = f" (assist: {g['assist']})" if g.get("assist") else ""
-            team_str = m["home_team"] if g.get("team") == "home" else m["away_team"]
-            lines.append(f"  {g.get('minute', '?')}' {g.get('player', '?')} — {team_str}{assist_str}")
+            assist = f" (assist: {g['assist']})" if g.get("assist") else ""
+            lines.append(f"  {g.get('minute','')}' {g.get('player','')} — {g.get('team','')}{assist}")
+
+    if own:
+        lines.append("\n🤦 <b>Own Goals:</b>")
+        for g in own:
+            lines.append(f"  {g.get('minute','')}' {g.get('player','')} — {g.get('team','')}")
 
     if yellows:
-        lines.append("\n🟨 <b>Yellow cards:</b>")
+        lines.append("\n🟨 <b>Yellow Cards:</b>")
         for y in yellows:
-            lines.append(f"  {y.get('minute', '?')}' {y.get('player', '?')}")
+            lines.append(f"  {y.get('minute','')}' {y.get('player','')} — {y.get('team','')}")
 
     if reds:
-        lines.append("\n🟥 <b>Red cards:</b>")
+        lines.append("\n🟥 <b>Red Cards:</b>")
         for r in reds:
-            lines.append(f"  {r.get('minute', '?')}' {r.get('player', '?')}")
+            lines.append(f"  {r.get('minute','')}' {r.get('player','')} — {r.get('team','')}")
 
-    if not goals and not yellows and not reds:
+    if not goals and not yellows and not reds and not own:
         lines.append("<i>No events recorded yet.</i>")
 
     kb = InlineKeyboardBuilder()
     kb.button(text="◀️ Back to Results", callback_data="home:results")
-    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.button(text=t(lang, "back_home"),    callback_data="home:back")
     kb.adjust(1)
 
-    try:
-        await callback.message.edit_text(
-            "\n".join(lines), parse_mode="HTML", reply_markup=kb.as_markup()
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+# ── Leaderboard ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "home:leaderboard")
+async def show_leaderboard(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    gw = await sheets.get_active_gameweek()
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(lang, "lb_btn_overall"), callback_data="lb:overall")
+    if gw:
+        kb.button(text=t(lang, "lb_btn_gw"), callback_data=f"lb:gw:{gw['id']}")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(2, 1)
+
+    await callback.message.edit_text(
+        "🏆 <b>Leaderboard</b>\n\nChoose view:",
+        parse_mode="HTML",
+        reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "lb:overall")
+async def show_overall_lb(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    rows = await sheets.get_overall_leaderboard(20)
+    my_uid = uid
+
+    lines = [t(lang, "lb_overall"), ""]
+    for i, r in enumerate(rows, 1):
+        username = mask_username(r.get("username", "?"))
+        pts      = r.get("total_points", 0)
+        me       = " 👈" if r.get("telegram_id") == my_uid else ""
+        lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("lb:gw:"))
+async def show_gw_lb(callback: CallbackQuery, state: FSMContext):
+    gw_id = int(callback.data.split(":")[2])
+    uid   = callback.from_user.id
+    user  = await sheets.get_user(uid)
+    lang  = await get_lang(uid, user)
+
+    rows = await sheets.get_gameweek_leaderboard(gw_id, 20)
+    gw   = await sheets.get_gameweek(gw_id)
+    gw_name = gw["name"] if gw else str(gw_id)
+
+    lines = [t(lang, "lb_gameweek", n=gw_name), ""]
+    for i, r in enumerate(rows, 1):
+        username = mask_username(r.get("username", "?"))
+        pts      = r.get("total_points", 0)
+        me       = " 👈" if r.get("telegram_id") == uid else ""
+        lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🏆 Overall",     callback_data="lb:overall")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(2)
+
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=kb.as_markup()
+    )
     await callback.answer()
