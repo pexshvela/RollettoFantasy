@@ -41,20 +41,32 @@ def get_starter_slots(formation: str) -> list[str]:
     return slots
 
 
-def get_bench_slots() -> list[str]:
-    return ["bench_gk", "bench_def", "bench_mf", "bench_fw"]
+def get_bench_slots(formation: str = "4-4-2") -> list[str]:
+    """Return bench slots for this formation to reach 2GK 5DEF 5MF 3FW."""
+    d = get_formation_slots(formation)
+    slots = ["bench_gk"]
+    bench_def = 5 - d["DEF"]
+    bench_mf  = 5 - d["MF"]
+    bench_fw  = 3 - d["FW"]
+    for i in range(1, bench_def + 1):
+        slots.append("bench_def" if i == 1 else f"bench_def{i}")
+    for i in range(1, bench_mf + 1):
+        slots.append("bench_mf" if i == 1 else f"bench_mf{i}")
+    for i in range(1, bench_fw + 1):
+        slots.append("bench_fw" if i == 1 else f"bench_fw{i}")
+    return slots
 
 
 def get_all_slots(formation: str) -> list[str]:
-    return get_starter_slots(formation) + get_bench_slots()
+    return get_starter_slots(formation) + get_bench_slots(formation)
 
 
 def slot_to_position(slot: str) -> str:
     """Convert slot name to position: gk1→GK, def3→DEF etc."""
-    if slot.startswith("gk") or slot == "bench_gk":    return "GK"
-    if slot.startswith("def") or slot == "bench_def":  return "DEF"
-    if slot.startswith("mf") or slot == "bench_mf":    return "MF"
-    if slot.startswith("fw") or slot == "bench_fw":    return "FW"
+    if "gk"  in slot: return "GK"
+    if "def" in slot: return "DEF"
+    if "mf"  in slot: return "MF"
+    if "fw"  in slot: return "FW"
     return "FW"
 
 
@@ -66,7 +78,7 @@ def build_squad_visual(squad: dict, formation: str, captain_id: str = "",
 
     lines = []
     starter_slots = get_starter_slots(formation)
-    bench_slots   = get_bench_slots()
+    bench_slots   = get_bench_slots(formation)
 
     def player_line(slot: str) -> str:
         pid = squad.get(slot, "")
