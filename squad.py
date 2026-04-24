@@ -262,26 +262,31 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
         pts        = await sheets.get_squad_points_summary(uid)
         visual     = build_squad_visual(squad, formation, captain_id, pts)
         confirmed  = (user or {}).get("confirmed", False)
+        before_dl  = await sheets.is_before_deadline()
 
-        # Add change captain button if before deadline
-        before_dl = await sheets.is_before_deadline()
-        kb = squad_review_keyboard(lang, confirmed=confirmed)
-        if before_dl:
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
-            import config as _config
-            kb2 = InlineKeyboardBuilder()
-            if not confirmed:
-                kb2.button(text="✅ Confirm Squad",    callback_data="squad:confirm")
-            kb2.button(text="⭐ Change Captain",       callback_data="squad:change_captain")
-            kb2.button(text="🔄 Rebuild Squad",        callback_data="squad:change")
+        kb2 = InlineKeyboardBuilder()
+
+        if confirmed:
+            # Confirmed — show locked status, only allow Change Team below squad
+            if before_dl:
+                kb2.button(text="⭐ Change Captain",   callback_data="squad:change_captain")
+                kb2.button(text="🔄 Change Team",      callback_data="squad:change_confirmed")
             kb2.button(text=t(lang, "back_home"),      callback_data="home:back")
-            kb2.adjust(1)
-            kb = kb2.as_markup()
+        else:
+            # Not confirmed yet — show confirm + captain + rebuild
+            if before_dl:
+                kb2.button(text="✅ Confirm Squad",    callback_data="squad:confirm")
+                kb2.button(text="⭐ Change Captain",   callback_data="squad:change_captain")
+                kb2.button(text="🔄 Rebuild Squad",    callback_data="squad:change")
+            kb2.button(text=t(lang, "back_home"),      callback_data="home:back")
 
+        kb2.adjust(1)
+
+        status = "🔒 <b>Confirmed</b>" if confirmed else "⚠️ <b>Not confirmed yet</b>"
         await callback.message.edit_text(
-            "📋 <b>My Squad</b>\n\n" + visual,
+            "📋 <b>My Squad</b>  " + status + "\n\n" + visual,
             parse_mode="HTML",
-            reply_markup=kb
+            reply_markup=kb2.as_markup()
         )
     else:
         await callback.message.edit_text(
@@ -399,6 +404,28 @@ async def _show_captain_picker(message, lang, squad, formation):
         await message.edit_text(txt, parse_mode="HTML", reply_markup=kb)
     except Exception:
         await message.answer(txt, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "squad:change_confirmed")
+async def change_confirmed_squad(callback: CallbackQuery, state: FSMContext):
+    """Change team after confirmation — show formation picker."""
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "deadline_passed"), show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        "🔄 <b>Change Team</b>\n\nChoose your new formation:",
+        parse_mode="HTML",
+        reply_markup=formation_keyboard(lang)
+    )
+    # Reset confirmation so they must re-confirm after changing
+    await sheets.update_user(uid, confirmed=False)
+    await state.set_state(Squad.formation)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "squad:change_captain")
