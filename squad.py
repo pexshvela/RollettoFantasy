@@ -51,16 +51,21 @@ def _all_filled(formation, squad):
 
 
 def _assign_slot(formation, squad, pid, pos):
+    """Fill next empty slot. If all slots full, replace the bench slot (last picked)."""
     squad = dict(squad)
     slots_def = get_formation_slots(formation)
     starter_slots = ["gk1"] if pos == "GK" else [pos.lower() + str(i) for i in range(1, slots_def.get(pos, 0) + 1)]
     bench_slot = "bench_" + pos.lower()
-    for slot in starter_slots:
+    all_slots  = starter_slots + [bench_slot]
+
+    # Fill first empty slot
+    for slot in all_slots:
         if not squad.get(slot):
             squad[slot] = pid
             return squad
-    if not squad.get(bench_slot):
-        squad[bench_slot] = pid
+
+    # All slots filled — replace bench slot (allow budget adjustment)
+    squad[bench_slot] = pid
     return squad
 
 
@@ -181,14 +186,23 @@ async def _show_pos_players(message, lang, formation, squad, pos, page=0):
     needs       = _needs(formation, squad)
     budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
     picked_ids  = {v for v in squad.values() if isinstance(v, str) and v}
+    # Always show players — even if position is full, user can replace to adjust budget
 
+    # When replacing (position full), calculate budget with refund of bench slot
+    needs = _needs(formation, squad)
     if needs.get(pos, 0) <= 0:
-        await _show_position_menu(message, lang, formation, squad)
-        return
+        slots_def = get_formation_slots(formation)
+        bench_slot = "bench_" + pos.lower()
+        old_pid = squad.get(bench_slot, "")
+        old_p   = get_player(old_pid) if old_pid else None
+        refund  = old_p["price"] if old_p else 0
+        effective_budget = budget_left + refund
+    else:
+        effective_budget = budget_left
 
     available = [
         p for p in get_players_by_position(pos)
-        if p["id"] not in picked_ids and p["price"] <= budget_left
+        if p["id"] not in picked_ids and p["price"] <= effective_budget
     ]
     available.sort(key=lambda p: -p["price"])
 
@@ -331,16 +345,33 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     squad     = dict(data.get("squad", {}))
     needs     = _needs(formation, squad)
 
-    if needs.get(pos, 0) <= 0:
-        await callback.answer("You don't need more " + POS_NAME.get(pos, pos) + "s.", show_alert=True)
-        return
-
     p = get_player(pid)
     if not p:
         await callback.answer("Player not found.", show_alert=True)
         return
 
-    if calc_squad_cost(squad) + p["price"] > config.TOTAL_BUDGET:
+    # If replacing an existing player, refund their price first
+    needs = _needs(formation, squad)
+    replacing = needs.get(pos, 0) <= 0  # position already full = replacing
+
+    if replacing:
+        # Find which slot will be replaced (bench slot)
+        slots_def = get_formation_slots(formation)
+        starter_slots = ["gk1"] if pos == "GK" else [pos.lower() + str(i) for i in range(1, slots_def.get(pos, 0) + 1)]
+        bench_slot = "bench_" + pos.lower()
+        all_slots  = starter_slots + [bench_slot]
+        # Find first filled slot to get the outgoing player price
+        outgoing_price = 0
+        for slot in all_slots:
+            if squad.get(slot):
+                old_p = get_player(squad[slot])
+                if old_p:
+                    outgoing_price = old_p["price"]
+        effective_cost = calc_squad_cost(squad) - outgoing_price + p["price"]
+    else:
+        effective_cost = calc_squad_cost(squad) + p["price"]
+
+    if effective_cost > config.TOTAL_BUDGET:
         await callback.answer(t(lang, "over_budget"), show_alert=True)
         return
 
