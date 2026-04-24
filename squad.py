@@ -28,16 +28,35 @@ POS_NAME  = {"GK": "GK", "DEF": "DEF", "MF": "MID", "FW": "FWD"}
 
 
 def _slots_for_formation(formation: str) -> list[tuple[str, str]]:
-    """Return ordered list of (slot_name, position) for the formation."""
-    d = get_formation_slots(formation)
-    slots = [("gk1", "GK")]
+    """
+    Squad is always: 2 GK, 5 DEF, 5 MF, 3 FW = 15 players.
+    Formation only determines which 11 start — reflected in slot naming.
+    Starters: 1 GK + formation DEF/MF/FW
+    Bench: remaining players to reach 2 GK, 5 DEF, 5 MF, 3 FW totals
+    """
+    d = get_formation_slots(formation)  # starter DEF/MF/FW counts
+
+    slots = []
+
+    # Starter GK
+    slots.append(("gk1", "GK"))
+
+    # Starter DEF, MF, FW per formation
     for i in range(1, d["DEF"] + 1): slots.append((f"def{i}", "DEF"))
     for i in range(1, d["MF"]  + 1): slots.append((f"mf{i}",  "MF"))
     for i in range(1, d["FW"]  + 1): slots.append((f"fw{i}",  "FW"))
-    slots.append(("bench_gk",  "GK"))
-    slots.append(("bench_def", "DEF"))
-    slots.append(("bench_mf",  "MF"))
-    slots.append(("bench_fw",  "FW"))
+
+    # Bench: fill remaining to reach 2 GK, 5 DEF, 5 MF, 3 FW
+    bench_gk  = 2 - 1                  # always 1 bench GK
+    bench_def = 5 - d["DEF"]           # remaining DEF
+    bench_mf  = 5 - d["MF"]            # remaining MF
+    bench_fw  = 3 - d["FW"]            # remaining FW
+
+    slots.append(("bench_gk", "GK"))
+    for i in range(1, bench_def + 1): slots.append((f"bench_def{i}", "DEF"))
+    for i in range(1, bench_mf  + 1): slots.append((f"bench_mf{i}",  "MF"))
+    for i in range(1, bench_fw  + 1): slots.append((f"bench_fw{i}",  "FW"))
+
     return slots
 
 
