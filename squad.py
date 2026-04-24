@@ -116,10 +116,10 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
 
     if complete:
         if not captain:
-            kb.button(text="⭐ Set Captain (required)", callback_data="squad:pick_captain")
+            kb.button(text="⭐ Choose Captain (required)", callback_data="squad:pick_captain")
         else:
-            kb.button(text="⭐ Change Captain",         callback_data="squad:pick_captain")
-            kb.button(text="✅ Confirm Squad",           callback_data="squad:confirm")
+            kb.button(text="⭐ Change Captain",            callback_data="squad:pick_captain")
+            kb.button(text="✅ Confirm Squad",             callback_data="squad:confirm")
 
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
