@@ -211,19 +211,25 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML", reply_markup=kb.as_markup()
         )
     else:
-        # Check if squad partially built in FSM
-        fsm = await state.get_data()
-        fsm_squad = fsm.get("squad", {})
-        fsm_form  = fsm.get("formation", formation)
-        if fsm_squad:
-            await _show_squad_menu(callback.message, lang, fsm_form, fsm_squad,
-                                   show_confirm=_all_filled(fsm_form, fsm_squad))
+        # Squad exists in DB but slot names may not match — show squad menu anyway
+        if squad and len([v for k,v in squad.items() if isinstance(v,str) and v and k!="formation"]) > 0:
+            await state.update_data(squad=squad, formation=formation)
+            await _show_squad_menu(callback.message, lang, formation, squad,
+                                   show_confirm=_all_filled(formation, squad))
         else:
-            await callback.message.edit_text(
-                t(lang, "build_squad"), parse_mode="HTML",
-                reply_markup=formation_keyboard(lang)
-            )
-            await state.set_state(Squad.formation)
+            # Check FSM
+            fsm = await state.get_data()
+            fsm_squad = fsm.get("squad", {})
+            fsm_form  = fsm.get("formation", formation)
+            if fsm_squad:
+                await _show_squad_menu(callback.message, lang, fsm_form, fsm_squad,
+                                       show_confirm=_all_filled(fsm_form, fsm_squad))
+            else:
+                await callback.message.edit_text(
+                    t(lang, "build_squad"), parse_mode="HTML",
+                    reply_markup=formation_keyboard(lang)
+                )
+                await state.set_state(Squad.formation)
     await callback.answer()
 
 
