@@ -73,9 +73,40 @@ STRINGS = {
         # Rules
         "rules_title":      "📖 <b>Points System</b>",
         "rules_text": """
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>HOW TO PLAY</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Squad</b>
+▸ Pick 15 players: 2 GK, 5 DEF, 5 MF, 3 FW
+▸ Budget: €100m
+▸ Choose a formation for your starting 11
+▸ Bench fills remaining positions automatically
+
+<b>Captain</b>
+▸ Must pick a captain before confirming
+▸ Captain scores ×2 points
+▸ No captain = cannot confirm
+
+<b>Confirmation</b>
+▸ You must confirm your squad before the deadline
+▸ Unconfirmed squads score 0 points that gameweek
+▸ After deadline your squad is locked
+
+<b>Transfers</b>
+▸ Transfer window opens/closes as set by admin
+▸ Free transfers per gameweek as set by admin (0 = unlimited)
+▸ Extra transfers cost -4 pts each
+▸ Outside the window = no transfers allowed
+▸ After a transfer you must re-confirm your squad
+
+━━━━━━━━━━━━━━━━━━━━
+⚽ <b>POINTS SYSTEM</b>
+━━━━━━━━━━━━━━━━━━━━
+
 <b>All Players:</b>
-▸ Played: +1 pt
-▸ 60+ min: +1 pt
+▸ Played (any): +1 pt
+▸ Played 60+ min: +1 pt
 ▸ Assist: +3 pts
 ▸ Penalty earned: +2 pts
 ▸ Penalty conceded: -1 pt
@@ -84,19 +115,19 @@ STRINGS = {
 ▸ Red card: -3 pts
 ▸ Yellow + Red: -4 pts
 ▸ Own goal: -2 pts
-▸ Def. actions (per 3): +1 pt
+▸ Def. actions per 3 (tackles+interceptions+blocks): +1 pt
 
 <b>Goalkeeper:</b>
 ▸ Goal: +6 pts
 ▸ Penalty saved: +5 pts
 ▸ Clean sheet (60+ min): +4 pts
-▸ Goals conceded (per 2): -1 pt
-▸ Saves (per 3): +1 pt
+▸ Goals conceded per 2: -1 pt
+▸ Saves per 3: +1 pt
 
 <b>Defender:</b>
 ▸ Goal: +6 pts
 ▸ Clean sheet (60+ min): +4 pts
-▸ Goals conceded (per 2): -1 pt
+▸ Goals conceded per 2: -1 pt
 
 <b>Midfielder:</b>
 ▸ Goal: +5 pts
@@ -106,6 +137,15 @@ STRINGS = {
 ▸ Goal: +4 pts
 
 <b>Captain: ×2 all points</b>
+▸ Only starting 11 score points (bench = 0)
+
+━━━━━━━━━━━━━━━━━━━━
+🏅 <b>LEADERBOARD</b>
+━━━━━━━━━━━━━━━━━━━━
+
+▸ Overall: total points across all gameweeks
+▸ Per gameweek: best score that week
+▸ Usernames are partially hidden for privacy
 """,
 
         # Notifications
