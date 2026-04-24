@@ -5,7 +5,7 @@ from translations import t
 from helpers import FORMATIONS
 
 
-def home_keyboard(lang: str) -> InlineKeyboardMarkup:
+def home_keyboard(lang: str, is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "btn_squad"),       callback_data="home:squad")
     kb.button(text=t(lang, "btn_transfers"),   callback_data="home:transfers")
@@ -14,7 +14,11 @@ def home_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb.button(text=t(lang, "btn_results"),     callback_data="home:results")
     kb.button(text=t(lang, "btn_leaderboard"), callback_data="home:leaderboard")
     kb.button(text=t(lang, "btn_rules"),       callback_data="home:rules")
-    kb.adjust(2, 2, 2, 1)
+    if is_admin:
+        kb.button(text="⚙️ Admin Panel",       callback_data="home:admin")
+        kb.adjust(2, 2, 2, 1, 1)
+    else:
+        kb.adjust(2, 2, 2, 1)
     return kb.as_markup()
 
 
