@@ -143,10 +143,8 @@ async def _show_player_list(message, lang: str, squad: dict, slot: str,
 
     picked_ids = {v for k, v in squad.items() if isinstance(v, str) and v and k != slot}
 
-    available = [
-        p for p in get_players_by_position(pos)
-        if p["id"] not in picked_ids and p["price"] <= budget_left
-    ]
+    # Show all players — unaffordable ones marked with 🚫
+    available = [p for p in get_players_by_position(pos) if p["id"] not in picked_ids]
     available.sort(key=lambda p: -p["price"])
 
     page_size = 8
@@ -168,7 +166,7 @@ async def _show_player_list(message, lang: str, squad: dict, slot: str,
         )
     if page > 0:
         kb.button(text="◀️ Prev", callback_data="slot:" + slot + ":" + str(page - 1))
-    if end < len(available):
+    if end < len(all_pos_players):
         kb.button(text="Next ▶️", callback_data="slot:" + slot + ":" + str(page + 1))
     kb.button(text="◀️ Back", callback_data="squad:list")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
@@ -324,7 +322,11 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad) + refund
 
     if p["price"] > budget_left:
-        await callback.answer(t(lang, "over_budget"), show_alert=True)
+        await callback.answer(
+            "❌ Insufficient funds! This player costs " + fmt_price(p["price"]) +
+            " but you only have " + fmt_price(budget_left) + " left.",
+            show_alert=True
+        )
         return
 
     squad[slot] = pid
