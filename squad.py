@@ -126,14 +126,48 @@ async def _show_position_menu(message, lang, formation, squad, edit=True):
         "Tap a position to add a player:"
     )
 
+    slots_def = get_formation_slots(formation)
+
     kb = InlineKeyboardBuilder()
-    for pos in ["GK", "DEF", "MF", "FW"]:
-        n = needs[pos]
-        suffix = " — " + str(n) + " needed" if n > 0 else " ✅"
-        kb.button(text=POS_EMOJI[pos] + " " + POS_NAME[pos] + suffix,
-                  callback_data="pos_pick:" + pos + ":0")
+
+    # GK row (1 button)
+    n = needs["GK"]
+    suffix = " ✅" if n == 0 else ""
+    kb.button(text=POS_EMOJI["GK"] + " GK" + suffix, callback_data="pos_pick:GK:0")
+
+    # DEF row (n_def buttons side by side)
+    n_def = slots_def["DEF"]
+    n = needs["DEF"]
+    suffix = " ✅" if n == 0 else ""
+    for _ in range(n_def):
+        kb.button(text=POS_EMOJI["DEF"] + suffix, callback_data="pos_pick:DEF:0")
+
+    # MF row
+    n_mf = slots_def["MF"]
+    n = needs["MF"]
+    suffix = " ✅" if n == 0 else ""
+    for _ in range(n_mf):
+        kb.button(text=POS_EMOJI["MF"] + suffix, callback_data="pos_pick:MF:0")
+
+    # FW row
+    n_fw = slots_def["FW"]
+    n = needs["FW"]
+    suffix = " ✅" if n == 0 else ""
+    for _ in range(n_fw):
+        kb.button(text=POS_EMOJI["FW"] + suffix, callback_data="pos_pick:FW:0")
+
+    # Bench row (GK DEF MF FW)
+    bench_positions = ["GK", "DEF", "MF", "FW"]
+    for pos in bench_positions:
+        bench_slot = "bench_" + pos.lower()
+        filled = bool(squad.get(bench_slot))
+        label = POS_EMOJI[pos] + (" ✅" if filled else "")
+        kb.button(text=label, callback_data="pos_pick:" + pos + ":0")
+
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
-    kb.adjust(1)
+
+    # Adjust rows to match pitch layout: 1, n_def, n_mf, n_fw, 4 bench, 1 home
+    kb.adjust(1, n_def, n_mf, n_fw, 4, 1)
 
     try:
         if edit:
