@@ -60,12 +60,14 @@ def _slots_for_formation(formation: str) -> list[tuple[str, str]]:
     return slots
 
 
-async def _show_squad_menu(message, lang: str, formation: str, squad: dict, edit: bool = True):
+async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
+                            edit: bool = True, show_confirm: bool = False):
     """Show the full squad as a vertical button list."""
     slots       = _slots_for_formation(formation)
     budget_used = calc_squad_cost(squad)
     budget_left = config.TOTAL_BUDGET - budget_used
     filled      = sum(1 for s, _ in slots if squad.get(s))
+    complete    = filled == len(slots)
 
     header = (
         "<b>Build Squad — " + formation + "</b>\n"
@@ -76,7 +78,6 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict, edit
     bench_started = False
     for slot, pos in slots:
         if slot.startswith("bench_") and not bench_started:
-            # Add a separator label before bench
             kb.button(text="── Substitutes ──", callback_data="squad:noop")
             bench_started = True
 
@@ -88,6 +89,11 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict, edit
             label = POS_EMOJI[pos] + " " + POS_NAME[pos] + " — tap to pick"
 
         kb.button(text=label, callback_data="slot:" + slot + ":0")
+
+    # Show captain + confirm buttons when squad is complete
+    if complete or show_confirm:
+        kb.button(text="⭐ Set Captain", callback_data="squad:pick_captain")
+        kb.button(text="✅ Confirm Squad", callback_data="squad:confirm")
 
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
@@ -205,11 +211,19 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML", reply_markup=kb.as_markup()
         )
     else:
-        await callback.message.edit_text(
-            t(lang, "build_squad"), parse_mode="HTML",
-            reply_markup=formation_keyboard(lang)
-        )
-        await state.set_state(Squad.formation)
+        # Check if squad partially built in FSM
+        fsm = await state.get_data()
+        fsm_squad = fsm.get("squad", {})
+        fsm_form  = fsm.get("formation", formation)
+        if fsm_squad:
+            await _show_squad_menu(callback.message, lang, fsm_form, fsm_squad,
+                                   show_confirm=_all_filled(fsm_form, fsm_squad))
+        else:
+            await callback.message.edit_text(
+                t(lang, "build_squad"), parse_mode="HTML",
+                reply_markup=formation_keyboard(lang)
+            )
+            await state.set_state(Squad.formation)
     await callback.answer()
 
 
@@ -299,15 +313,14 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     squad[slot] = pid
     await state.update_data(squad=squad)
 
+    await sheets.save_squad(uid, dict(squad, formation=formation))
     if _all_filled(formation, squad):
-        await sheets.save_squad(uid, dict(squad, formation=formation))
-        # Go to captain if not set yet, else back to squad menu
         captain = (user or {}).get("captain", "")
         if not captain:
             await _show_captain_picker(callback.message, lang, squad, formation)
             await state.set_state(Squad.captain)
         else:
-            await _show_squad_menu(callback.message, lang, formation, squad)
+            await _show_squad_menu(callback.message, lang, formation, squad, show_confirm=True)
     else:
         await _show_squad_menu(callback.message, lang, formation, squad)
 
@@ -323,6 +336,24 @@ async def _show_captain_picker(message, lang, squad, formation):
         await message.edit_text(txt, parse_mode="HTML", reply_markup=kb)
     except Exception:
         await message.answer(txt, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "squad:pick_captain")
+async def go_pick_captain(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+    data = await state.get_data()
+    squad     = data.get("squad", {})
+    formation = data.get("formation", (user or {}).get("formation", "4-3-3"))
+    if not squad:
+        db = await sheets.get_squad(uid)
+        if db:
+            squad = db
+            await state.update_data(squad=squad, formation=formation)
+    await _show_captain_picker(callback.message, lang, squad, formation)
+    await state.set_state(Squad.captain)
+    await callback.answer()
 
 
 @router.callback_query(Squad.captain, F.data.startswith("captain:"))
@@ -467,9 +498,17 @@ async def change_confirmed_squad(callback: CallbackQuery, state: FSMContext):
         await callback.answer(t(lang, "deadline_passed"), show_alert=True)
         return
     await sheets.update_user(uid, confirmed=False)
-    await callback.message.edit_text(
-        "🔄 <b>Change Team</b>\n\nChoose your new formation:",
-        parse_mode="HTML", reply_markup=formation_keyboard(lang)
-    )
-    await state.set_state(Squad.formation)
+    # Load existing squad and show it for editing
+    squad     = await sheets.get_squad(uid)
+    formation = (user or {}).get("formation", "4-3-3")
+    await state.update_data(squad=squad or {}, formation=formation)
+    if squad:
+        await _show_squad_menu(callback.message, lang, formation, squad,
+                               show_confirm=_all_filled(formation, squad))
+    else:
+        await callback.message.edit_text(
+            t(lang, "build_squad"), parse_mode="HTML",
+            reply_markup=formation_keyboard(lang)
+        )
+        await state.set_state(Squad.formation)
     await callback.answer()
