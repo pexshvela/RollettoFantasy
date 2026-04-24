@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import sheets
 import players as pl_module
+import config as _config
 from states import Registration
 from translations import t
 from inline import home_keyboard, back_home
@@ -122,15 +123,18 @@ async def go_home(callback: CallbackQuery, state: FSMContext):
 
 async def _show_home(message: Message, user: dict, lang: str):
     text = await _home_text(user, lang)
-    await message.answer(text, parse_mode="HTML", reply_markup=home_keyboard(lang))
+    uid = user.get("telegram_id", 0)
+    await message.answer(text, parse_mode="HTML", reply_markup=home_keyboard(lang, is_admin=int(uid) == _config.ADMIN_ID))
 
 
 async def _edit_home(message: Message, user: dict, lang: str):
     text = await _home_text(user, lang)
+    uid = user.get("telegram_id", 0)
+    kb = home_keyboard(lang, is_admin=int(uid) == _config.ADMIN_ID)
     try:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=home_keyboard(lang))
+        await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        await message.answer(text, parse_mode="HTML", reply_markup=home_keyboard(lang))
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 async def _home_text(user: dict, lang: str) -> str:
@@ -152,6 +156,22 @@ async def _home_text(user: dict, lang: str) -> str:
 
     status = "\n".join(status_parts)
     return t(lang, "home_title", status=status)
+
+
+@router.callback_query(F.data == "home:admin")
+async def go_admin(callback: CallbackQuery, state: FSMContext):
+    from admin import router as admin_router
+    uid = callback.from_user.id
+    if uid != _config.ADMIN_ID:
+        await callback.answer("Not authorized.", show_alert=True)
+        return
+    from inline import admin_keyboard
+    await callback.message.edit_text(
+        "⚙️ <b>Admin Panel</b>",
+        parse_mode="HTML",
+        reply_markup=admin_keyboard()
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "home:rules")
