@@ -140,8 +140,19 @@ async def _edit_home(message: Message, user: dict, lang: str):
 async def _home_text(user: dict, lang: str) -> str:
     gw = await sheets.get_active_gameweek()
     deadline = await sheets.get_confirmation_deadline()
-    confirmed = user.get("confirmed", False)
     pts = user.get("total_points", 0)
+    uid = user.get("telegram_id", 0)
+    # Check confirmation via confirmations table (not user.confirmed which is unreliable)
+    confirmed = False
+    try:
+        all_gws = await sheets.get_all_gameweeks()
+        for gw_row in all_gws:
+            conf = await sheets.get_confirmation(int(uid), gw_row["id"])
+            if conf:
+                confirmed = True
+                break
+    except Exception:
+        pass
 
     status_parts = []
     if gw:
