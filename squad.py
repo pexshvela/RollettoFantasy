@@ -127,12 +127,15 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
 
+    uid = message.chat.id if hasattr(message, "chat") else None
     try:
         if edit:
             sent = await message.edit_text(header, parse_mode="HTML", reply_markup=kb.as_markup())
+            # Store message_id so we can delete it later if needed
+            if uid:
+                _squad_menu_msg[uid] = message.message_id
         else:
             # Delete old squad menu if exists
-            uid = message.chat.id if hasattr(message, "chat") else None
             if uid and uid in _squad_menu_msg:
                 try:
                     await message.bot.delete_message(message.chat.id, _squad_menu_msg[uid])
@@ -143,7 +146,6 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
                 _squad_menu_msg[uid] = sent.message_id
     except Exception:
         sent = await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
-        uid = message.chat.id if hasattr(message, "chat") else None
         if uid:
             _squad_menu_msg[uid] = sent.message_id
 
