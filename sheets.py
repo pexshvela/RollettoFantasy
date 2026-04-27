@@ -376,6 +376,18 @@ async def get_unprocessed_matches() -> list[dict]:
         return []
 
 
+async def update_match_cache(match_id: str, fields: dict):
+    """Update specific fields in an existing match_cache row."""
+    import json
+    try:
+        data = {}
+        for k, v in fields.items():
+            data[k] = json.dumps(v) if isinstance(v, (list, dict)) else v
+        _get_sb().table("match_cache").update(data).eq("match_id", match_id).execute()
+    except Exception as e:
+        logger.error("update_match_cache error: %s", e)
+
+
 async def get_recent_matches(days: int = 3, tournament: str = None) -> list[dict]:
     from datetime import date, timedelta
     cutoff = (date.today() - timedelta(days=days)).isoformat()
