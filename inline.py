@@ -129,11 +129,31 @@ def leaderboard_keyboard(lang: str, gw_id: int = None) -> InlineKeyboardMarkup:
 
 def results_keyboard(matches: list, lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    shown_upcoming = False
     for m in matches:
-        label = (f"{'✅' if m['status']=='final' else '🔴' if m['status']=='in_progress' else '⏳'}"
-                 f" {m['home_team']} {m['home_score']}-{m['away_score']} {m['away_team']}"
-                 f" ({str(m.get('match_date',''))[-5:]})")
-        kb.button(text=label, callback_data=f"result:{m['match_id']}")
+        has_score = m.get("home_score") is not None
+        status    = m.get("status", "")
+        date_str  = str(m.get("match_date", ""))[-5:]
+
+        # Section separator before upcoming matches
+        if not has_score and not shown_upcoming:
+            kb.button(text="── Upcoming Matches ──", callback_data="squad:noop")
+            shown_upcoming = True
+
+        if has_score:
+            icon  = "✅" if status == "final" else "🔴"
+            label = icon + " " + m["home_team"] + " " + str(m["home_score"]) + "-" + str(m["away_score"]) + " " + m["away_team"] + " (" + date_str + ")"
+        else:
+            time_str = str(m.get("kickoff_timestamp", ""))
+            if time_str and time_str.isdigit():
+                import datetime
+                kt = datetime.datetime.utcfromtimestamp(int(time_str))
+                time_str = kt.strftime("%H:%M")
+            else:
+                time_str = ""
+            label = "⏳ " + m["home_team"] + " vs " + m["away_team"] + " (" + date_str + (" " + time_str if time_str else "") + ")"
+
+        kb.button(text=label, callback_data="result:" + str(m["match_id"]))
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
     return kb.as_markup()
