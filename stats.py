@@ -131,9 +131,12 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    matches = await sheets.get_recent_matches(days=3)
-    # Only show final matches
-    matches = [m for m in matches if m.get("status") in ("final", "in_progress")]
+    matches = await sheets.get_recent_matches(days=14)
+    # Show finished or in-progress matches
+    matches = [m for m in matches if m.get("status") in (
+        "final", "in_progress", "FT", "AET", "PEN", "finished",
+        "Match Finished", "1H", "2H", "HT", "ET", "BT", "P", "LIVE"
+    )]
 
     if not matches:
         kb = InlineKeyboardBuilder()
