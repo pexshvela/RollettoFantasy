@@ -166,7 +166,19 @@ async def show_match_detail(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Match not found.", show_alert=True)
         return
 
-    events   = m.get("events") or []
+    # If no events stored, fetch them live from API
+    events = m.get("events") or []
+    if not events and m.get("home_score") is not None:
+        try:
+            from football_api import get_match_events
+            live_events = await get_match_events(int(match_id))
+            if live_events:
+                events = live_events
+                # Save back to cache
+                await sheets.update_match_cache(match_id, {"events": live_events})
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Could not fetch events for %s: %s", match_id, e)
     status_w = {"final":"Full Time","in_progress":"Live","scheduled":"Upcoming"}.get(
         m.get("status",""), m.get("status",""))
 
