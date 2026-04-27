@@ -336,7 +336,6 @@ async def save_match_cache(match: dict):
             "match_time":        match.get("time", ""),
             "kickoff_timestamp": match.get("kickoff_timestamp", 0),
             "tournament":        match.get("tournament", ""),
-            "round":             match.get("round", ""),
             "events":            json.dumps(match.get("events", [])),
             "player_stats":      json.dumps(match.get("player_stats", {})),
             "points_awarded":    match.get("points_awarded", False),
