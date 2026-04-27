@@ -376,6 +376,27 @@ async def get_unprocessed_matches() -> list[dict]:
         return []
 
 
+async def get_upcoming_matches(days: int = 7) -> list[dict]:
+    from datetime import date, timedelta
+    cutoff = (date.today() + timedelta(days=days)).isoformat()
+    today  = date.today().isoformat()
+    try:
+        res = _get_sb().table("match_cache").select("*")             .gte("match_date", today)             .lte("match_date", cutoff)             .order("match_date").execute()
+        rows = res.data or []
+        for r in rows:
+            for f in ("events", "player_stats"):
+                if isinstance(r.get(f), str):
+                    try:
+                        import json
+                        r[f] = json.loads(r[f])
+                    except Exception:
+                        r[f] = []
+        return rows
+    except Exception as e:
+        logger.error("get_upcoming_matches error: %s", e)
+        return []
+
+
 async def update_match_cache(match_id: str, fields: dict):
     """Update specific fields in an existing match_cache row."""
     import json
