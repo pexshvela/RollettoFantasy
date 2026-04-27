@@ -336,6 +336,94 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# ── Search ───────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("search_player:"))
+async def search_player_prompt(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    slot, pos = parts[1], parts[2]
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    await state.update_data(search_slot=slot, search_pos=pos)
+    await state.set_state(Squad.searching)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Cancel", callback_data="slot:" + slot + ":0")
+    kb.adjust(1)
+
+    try:
+        await callback.message.edit_text(
+        await callback.message.edit_text(
+            "🔍 <b>Search player</b>\n\nType a player name:",
+            parse_mode="HTML", reply_markup=kb.as_markup()
+        )
+        )
+    except Exception:
+        await callback.message.answer(
+        await callback.message.answer(
+            "🔍 <b>Search player</b>\n\nType a player name:",
+            parse_mode="HTML", reply_markup=kb.as_markup()
+        )
+        )
+    await callback.answer()
+
+
+@router.message(Squad.searching)
+async def search_player_results(message, state: FSMContext):
+    from aiogram.types import Message as AioMessage
+    uid  = message.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+    data = await state.get_data()
+
+    slot      = data.get("search_slot", "")
+    pos       = data.get("search_pos", "GK")
+    query     = message.text.strip().lower()
+    squad     = data.get("squad", {})
+    formation = data.get("formation", (user or {}).get("formation", "4-3-3"))
+
+    if not squad:
+        db = await sheets.get_squad(uid)
+        if db: squad = db
+
+    budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
+    current_pid = squad.get(slot, "")
+    current_p   = get_player(current_pid) if current_pid else None
+    if current_p:
+        budget_left += current_p["price"]
+
+    picked_ids = {v for k, v in squad.items() if isinstance(v, str) and v and k != slot}
+
+    # Search all players of this position
+    results = [
+        p for p in get_players_by_position(pos)
+        if query in p["name"].lower() or query in p["team"].lower()
+        if p["id"] not in picked_ids
+    ]
+    results.sort(key=lambda p: -p["price"])
+
+    kb = InlineKeyboardBuilder()
+    if not results:
+        kb.button(text="No players found", callback_data="squad:noop")
+    else:
+        for p in results[:10]:
+            can_afford = p["price"] <= budget_left
+            label = ("" if can_afford else "🚫 ") + p["name"] + " (" + p["team"] + ") — " + fmt_price(p["price"])
+            kb.button(text=label, callback_data="pick:" + slot + ":" + p["id"])
+
+    kb.button(text="🔍 Search again", callback_data="search_player:" + slot + ":" + pos)
+    kb.button(text="◀️ Back to list",  callback_data="slot:" + slot + ":0")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
+
+    await message.answer(
+        "🔍 Results for <b>" + message.text + "</b>:",
+        parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+
+
 # ── Captain ───────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "squad:pick_captain")
