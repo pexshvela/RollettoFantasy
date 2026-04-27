@@ -370,18 +370,52 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
 
-    # Collapse the inline result to a simple confirmation (no button)
-    try:
-        await callback.message.edit_text(
-            "✅ <b>" + p["name"] + "</b> added to squad.",
-            parse_mode="HTML",
-            reply_markup=None
-        )
-    except Exception:
-        pass
+    # For inline query results, callback.message is None
+    # Use bot.send_message directly with the user's chat_id
+    chat_id = callback.from_user.id
 
-    # Send fresh squad menu as a new message
-    await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=False)
+    # Delete old squad menu if we have it stored
+    if chat_id in _squad_menu_msg:
+        try:
+            await callback.bot.delete_message(chat_id, _squad_menu_msg[chat_id])
+        except Exception:
+            pass
+
+    # Build and send new squad menu directly
+    from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+    slots       = _all_slots_for(formation)
+    budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
+    filled      = sum(1 for s, _ in slots if squad.get(s))
+    complete    = _is_complete(squad)
+
+
+    header = (
+        "<b>My Squad — " + formation + "</b>\n"
+        "💰 " + fmt_price(budget_left) + "  👥 " + str(filled) + "/15"
+    )
+    starters    = _starter_slots(formation)
+    bench_slots = [s for s, _ in slots if s not in starters]
+    kb          = _IKB()
+    shown_bench = False
+    for slot2, pos2 in slots:
+        if slot2 in bench_slots and not shown_bench:
+            kb.button(text="── Substitutes ──", callback_data="squad:noop")
+            shown_bench = True
+        label = _slot_label(slot2, pos2, squad, formation, captain)
+        kb.button(text=label, callback_data="slot:" + slot2 + ":0")
+    if complete:
+        if not captain:
+            kb.button(text="⭐ Choose Captain (required)", callback_data="squad:pick_captain")
+        else:
+            kb.button(text="⭐ Change Captain", callback_data="squad:pick_captain")
+            kb.button(text="✅ Confirm Squad",  callback_data="squad:confirm")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
+
+    sent = await callback.bot.send_message(
+        chat_id, header, parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+    _squad_menu_msg[chat_id] = sent.message_id
 
 
 # ── Search ───────────────────────────────────────────────────────────────────
