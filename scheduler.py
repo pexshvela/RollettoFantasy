@@ -37,6 +37,7 @@ async def run_scheduler(bot=None):
             await check_due_matches(bot)
             await check_deadline_notifications(bot)
             await check_transfer_window_notifications(bot)
+            await check_admin_reminders(bot)
         except Exception as e:
             logger.error("Scheduler error: %s", e)
         await asyncio.sleep(POLL_INTERVAL)
@@ -393,6 +394,73 @@ async def check_transfer_window_notifications(bot=None):
 
 
 # ── Auto gameweek creation ────────────────────────────────────────────────────
+
+async def check_admin_reminders(bot=None):
+    """Send daily reminders to admin at 09:00 UTC when action is needed."""
+    if not bot:
+        return
+    from datetime import datetime, date, timedelta
+    import config as _cfg
+
+    now   = datetime.utcnow()
+    today = date.today()
+    if now.hour != 9:
+        return
+
+    key = "admin_reminder_" + today.isoformat()
+    if getattr(check_admin_reminders, "_sent", None) == key:
+        return
+    check_admin_reminders._sent = key
+
+    admin = _cfg.ADMIN_ID
+    msgs  = []
+
+    try:
+        all_gws  = await sheets.get_all_gameweeks()
+        deadline = await sheets.get_confirmation_deadline()
+        tw_open  = await sheets.get_setting("transfer_window_open")
+
+        tomorrow  = (today + timedelta(days=1)).isoformat()
+        in_2_days = (today + timedelta(days=2)).isoformat()
+
+        has_today    = any(g.get("start_date") == today.isoformat() for g in all_gws)
+        has_tomorrow = any(g.get("start_date") == tomorrow for g in all_gws)
+        has_2_days   = any(g.get("start_date") == in_2_days for g in all_gws)
+
+        nl = "\n"
+        if has_today and not deadline:
+            msgs.append(
+                "⚠️ <b>Admin Reminder</b>" + nl + nl +
+                "Matches TODAY but no deadline set!" + nl + nl +
+                "<code>/setdeadline " + today.isoformat() + " 18:00</code>"
+            )
+
+        if has_tomorrow and not deadline:
+            msgs.append(
+                "⚠️ <b>Admin Reminder</b>" + nl + nl +
+                "Matches tomorrow <b>" + tomorrow + "</b> — no deadline set!" + nl + nl +
+                "<code>/setdeadline " + tomorrow + " 18:00</code>" + nl +
+                "<code>/settransfers open " + today.isoformat() + " 10:00 close " + tomorrow + " 17:00 free 1</code>"
+            )
+
+        if has_2_days and not tw_open:
+            msgs.append(
+                "ℹ️ <b>Admin Reminder</b>" + nl + nl +
+                "Matches in 2 days <b>" + in_2_days + "</b>" + nl +
+                "Consider opening transfers:" + nl + nl +
+                "<code>/settransfers open " + today.isoformat() + " 12:00 close " + in_2_days + " 17:00 free 1</code>"
+            )
+
+    except Exception as e:
+        logger.error("admin reminder error: %s", e)
+
+    for msg in msgs:
+        try:
+            await bot.send_message(admin, msg, parse_mode="HTML")
+        except Exception as e:
+            logger.error("admin reminder send: %s", e)
+
+
 
 async def auto_create_gameweeks(matches: list):
     """Group matches by date and create gameweeks automatically."""
