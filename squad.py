@@ -353,11 +353,13 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
 
-    # Try to edit existing message; if from inline result, send fresh squad menu
+    # Delete the inline result message, then send fresh squad menu
     try:
-        await _show_squad_menu(callback.message, lang, formation, squad, captain)
+        await callback.message.delete()
     except Exception:
-        await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=False)
+        pass
+
+    await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=False)
 
 
 # ── Search ───────────────────────────────────────────────────────────────────
