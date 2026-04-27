@@ -131,9 +131,14 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    matches = await sheets.get_recent_matches(days=14)
-    # Show all matches that have a score (home_score is not None)
-    matches = [m for m in matches if m.get("home_score") is not None]
+    # Get finished matches (last 14 days) + upcoming matches (next 7 days)
+    finished  = await sheets.get_recent_matches(days=14)
+    finished  = [m for m in finished if m.get("home_score") is not None]
+    upcoming  = await sheets.get_upcoming_matches(days=7)
+    # Combine: finished first (newest first), then upcoming (soonest first)
+    finished.sort(key=lambda m: m.get("match_date", ""), reverse=True)
+    upcoming.sort(key=lambda m: m.get("match_date", ""))
+    matches = finished + upcoming
 
     if not matches:
         kb = InlineKeyboardBuilder()
