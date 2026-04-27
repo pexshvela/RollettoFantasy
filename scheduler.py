@@ -186,20 +186,34 @@ async def award_points(match: dict, bot=None):
                 len(bot_player_stats), len(player_stats_raw) // 2, home_team, away_team)
 
     # Find gameweek by match date
-    from datetime import date as _date
     match_date = match.get("date", "")
     all_gws    = await sheets.get_all_gameweeks()
     gw_id      = 0
+
+    # 1. Exact date match (start_date <= match_date <= end_date)
     for gw in all_gws:
-        if gw.get("start_date") == match_date or gw.get("end_date") == match_date:
+        start = gw.get("start_date", "")
+        end   = gw.get("end_date", "") or start
+        if start and start <= match_date <= end:
             gw_id = gw["id"]
             break
-    # Fallback: use any upcoming/active gameweek
+
+    # 2. Fallback: gameweek whose start_date matches
     if not gw_id:
         for gw in all_gws:
-            if gw.get("status") in ("upcoming", "active"):
+            if gw.get("start_date") == match_date:
                 gw_id = gw["id"]
                 break
+
+    # 3. Fallback: closest upcoming gameweek by start_date
+    if not gw_id:
+        upcoming = [g for g in all_gws if g.get("start_date", "") <= match_date]
+        if upcoming:
+            gw_id = sorted(upcoming, key=lambda g: g.get("start_date",""), reverse=True)[0]["id"]
+
+    # 4. Last resort: first gameweek
+    if not gw_id and all_gws:
+        gw_id = all_gws[0]["id"]
 
     if not gw_id:
         logger.warning("No gameweek found for match on %s — cannot award points", match_date)
