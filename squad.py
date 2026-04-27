@@ -159,9 +159,12 @@ async def _show_player_list(message, lang: str, squad: dict, slot: str,
     )
 
     kb = InlineKeyboardBuilder()
+    kb.button(text="🔍 Search player", callback_data="search_player:" + slot + ":" + pos)
     for p in page_p:
+        can_afford = p["price"] <= budget_left
+        prefix = "" if can_afford else "🚫 "
         kb.button(
-            text=p["name"] + " (" + p["team"] + ") — " + fmt_price(p["price"]),
+            text=prefix + p["name"] + " (" + p["team"] + ") — " + fmt_price(p["price"]),
             callback_data="pick:" + slot + ":" + p["id"]
         )
     if page > 0:
