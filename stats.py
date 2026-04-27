@@ -131,14 +131,38 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    # Get finished matches (last 14 days) + upcoming matches (next 7 days)
-    finished  = await sheets.get_recent_matches(days=14)
-    finished  = [m for m in finished if m.get("home_score") is not None]
-    upcoming  = await sheets.get_upcoming_matches(days=7)
-    # Combine: finished first (newest first), then upcoming (soonest first)
-    finished.sort(key=lambda m: m.get("match_date", ""), reverse=True)
-    upcoming.sort(key=lambda m: m.get("match_date", ""))
-    matches = finished + upcoming
+    from datetime import date as _date
+    today_str = _date.today().isoformat()
+
+    all_matches = await sheets.get_recent_matches(days=30)
+
+    # Finished = has a real score AND match date is today or past
+    finished = [m for m in all_matches
+                if m.get("match_date", "") <= today_str
+                and m.get("home_score") is not None
+                and m.get("away_score") is not None
+                and m.get("status") not in ("", None, "scheduled", "Not Started", "TBD")]
+
+    # Upcoming = future dates OR no status/score
+    upcoming = [m for m in all_matches
+                if m.get("match_date", "") > today_str
+                or m.get("status") in ("scheduled", "Not Started", "TBD", "")
+                and m.get("home_score") in (None, 0) and m.get("away_score") in (None, 0)]
+
+    # Deduplicate by match_id
+    seen = set()
+    def dedup(lst):
+        out = []
+        for m in lst:
+            mid = m.get("match_id")
+            if mid not in seen:
+                seen.add(mid)
+                out.append(m)
+        return out
+
+    finished = dedup(sorted(finished, key=lambda m: m.get("match_date",""), reverse=True))
+    upcoming = dedup(sorted(upcoming, key=lambda m: m.get("match_date","")))
+    matches  = finished + upcoming
 
     if not matches:
         kb = InlineKeyboardBuilder()
