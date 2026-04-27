@@ -88,6 +88,9 @@ def _slot_label(slot: str, pos: str, squad: dict, formation: str, captain: str) 
         return POS_EMOJI[pos] + role + " — tap to pick"
 
 
+_squad_menu_msg: dict[int, int] = {}  # uid -> message_id of last squad menu
+
+
 async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
                             captain: str = "", edit: bool = True):
     budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
@@ -126,11 +129,23 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
 
     try:
         if edit:
-            await message.edit_text(header, parse_mode="HTML", reply_markup=kb.as_markup())
+            sent = await message.edit_text(header, parse_mode="HTML", reply_markup=kb.as_markup())
         else:
-            await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
+            # Delete old squad menu if exists
+            uid = message.chat.id if hasattr(message, "chat") else None
+            if uid and uid in _squad_menu_msg:
+                try:
+                    await message.bot.delete_message(message.chat.id, _squad_menu_msg[uid])
+                except Exception:
+                    pass
+            sent = await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
+            if uid:
+                _squad_menu_msg[uid] = sent.message_id
     except Exception:
-        await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
+        sent = await message.answer(header, parse_mode="HTML", reply_markup=kb.as_markup())
+        uid = message.chat.id if hasattr(message, "chat") else None
+        if uid:
+            _squad_menu_msg[uid] = sent.message_id
 
 
 async def _show_player_list(message, lang: str, squad: dict, slot: str,
@@ -353,7 +368,7 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
 
-    # Collapse the inline result message to just a confirmation line
+    # Collapse the inline result to a simple confirmation (no button)
     try:
         await callback.message.edit_text(
             "✅ <b>" + p["name"] + "</b> added to squad.",
@@ -363,7 +378,7 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    # Send fresh squad menu as new message
+    # Send fresh squad menu as a new message
     await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=False)
 
 
