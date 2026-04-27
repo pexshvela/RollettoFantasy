@@ -325,6 +325,16 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Player not found.", show_alert=True)
         return
 
+    # Fix: validate position matches slot
+    expected_pos = _slot_pos(slot)
+    if p["position"] != expected_pos:
+        await callback.answer(
+            "❌ Wrong position! Slot needs " + expected_pos +
+            " but " + p["name"] + " is a " + p["position"] + ".",
+            show_alert=True
+        )
+        return
+
     current_pid = squad.get(slot, "")
     current_p   = get_player(current_pid) if current_pid else None
     refund      = current_p["price"] if current_p else 0
@@ -340,9 +350,17 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     squad[slot] = pid
     await state.update_data(squad=squad)
-    await sheets.save_squad(uid, dict(squad, formation=formation))
-    await _show_squad_menu(callback.message, lang, formation, squad, captain)
-    await callback.answer()
+    # Only auto-save when squad is complete — not on every pick
+    if _is_complete(squad):
+        await sheets.save_squad(uid, dict(squad, formation=formation))
+
+    await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
+
+    # Try to edit existing message; if from inline result, send fresh squad menu
+    try:
+        await _show_squad_menu(callback.message, lang, formation, squad, captain)
+    except Exception:
+        await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=False)
 
 
 # ── Search ───────────────────────────────────────────────────────────────────
