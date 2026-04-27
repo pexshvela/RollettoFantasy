@@ -159,7 +159,13 @@ async def _show_player_list(message, lang: str, squad: dict, slot: str,
     )
 
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔍 Search player", callback_data="search_player:" + slot + ":" + pos)
+    # Inline search button — opens dynamic search as user types
+    from aiogram.types import InlineKeyboardButton
+    search_btn = InlineKeyboardButton(
+        text="🔍 Search player",
+        switch_inline_query_current_chat="search:" + slot + ":" + pos + " "
+    )
+    kb.row(search_btn)
     for p in page_p:
         can_afford = p["price"] <= budget_left
         prefix = "" if can_afford else "🚫 "
