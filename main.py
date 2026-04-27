@@ -84,12 +84,12 @@ async def main():
                     title=p["name"],
                     description=p["team"] + " — " + fmt_price(p["price"]),
                     input_message_content=InputTextMessageContent(
-                        message_text="✅ Selected: " + p["name"]
+                        message_text="🔍 " + p["name"] + " (" + p["team"] + ") — " + fmt_price(p["price"])
                     ),
                     reply_markup=__import__("aiogram").types.InlineKeyboardMarkup(
                         inline_keyboard=[[
                             __import__("aiogram").types.InlineKeyboardButton(
-                                text="✅ Pick " + p["name"],
+                                text="✅ Add to squad",
                                 callback_data="pick:" + slot + ":" + p["id"]
                             )
                         ]]
