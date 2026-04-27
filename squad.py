@@ -350,9 +350,6 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     squad[slot] = pid
     await state.update_data(squad=squad)
-    # Only auto-save when squad is complete — not on every pick
-    if _is_complete(squad):
-        await sheets.save_squad(uid, dict(squad, formation=formation))
 
     await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
 
