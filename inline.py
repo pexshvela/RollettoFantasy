@@ -131,16 +131,16 @@ def results_keyboard(matches: list, lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     shown_upcoming = False
     for m in matches:
-        has_score = m.get("home_score") is not None
         status    = m.get("status", "")
         date_str  = str(m.get("match_date", ""))[-5:]
+        is_done   = status not in ("", None, "scheduled", "Not Started", "TBD")                     and m.get("home_score") is not None
 
         # Section separator before upcoming matches
-        if not has_score and not shown_upcoming:
-            kb.button(text="── Upcoming Matches ──", callback_data="squad:noop")
+        if not is_done and not shown_upcoming:
+            kb.button(text="── Upcoming──", callback_data="squad:noop")
             shown_upcoming = True
 
-        if has_score:
+        if is_done:
             icon  = "✅" if status == "final" else "🔴"
             label = icon + " " + m["home_team"] + " " + str(m["home_score"]) + "-" + str(m["away_score"]) + " " + m["away_team"] + " (" + date_str + ")"
         else:
