@@ -562,6 +562,13 @@ PL_PLAYERS_RAW = [
 ]
 
 
+def _stable_id(name: str, pos: str) -> str:
+    """Generate a stable ID from name so it never changes when list order changes."""
+    import hashlib
+    key = (pos + "_" + name).lower().encode()
+    return pos.lower() + "_" + hashlib.md5(key).hexdigest()[:8]
+
+
 def _build_lookup(raw_list: list) -> tuple[dict, dict, dict]:
     """Build ALL_PLAYERS dict, name→player map, norm_name→player map."""
     all_players = {}
@@ -569,10 +576,14 @@ def _build_lookup(raw_list: list) -> tuple[dict, dict, dict]:
     norm_map    = {}
 
     for i, p in enumerate(raw_list):
-        pid = f"{p['pos'].lower()}_{i:03d}"
+        pid = _stable_id(p["name"], p["pos"])
+        # Use first + last name only for display
+        parts = p["name"].split()
+        short_name = parts[0] + " " + parts[-1] if len(parts) > 1 else p["name"]
         entry = {
             "id":       pid,
-            "name":     p["name"],
+            "name":     short_name,
+            "full_name": p["name"],
             "team":     p["team"],
             "position": p["pos"],
             "price":    p["price"],
@@ -616,7 +627,13 @@ def get_all_players() -> dict:
 
 
 def get_player(pid: str) -> Optional[dict]:
-    return get_all_players().get(pid)
+    """Get player by ID. Falls back to name search for old index-based IDs."""
+    players = get_all_players()
+    if pid in players:
+        return players[pid]
+    # Fallback: old IDs were like "mf_047" — try to match by searching full_name
+    # This handles squads saved before stable IDs were introduced
+    return None
 
 
 def get_players_by_position(pos: str) -> list:
