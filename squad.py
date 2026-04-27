@@ -166,7 +166,7 @@ async def _show_player_list(message, lang: str, squad: dict, slot: str,
         )
     if page > 0:
         kb.button(text="◀️ Prev", callback_data="slot:" + slot + ":" + str(page - 1))
-    if end < len(all_pos_players):
+    if end < len(available):
         kb.button(text="Next ▶️", callback_data="slot:" + slot + ":" + str(page + 1))
     kb.button(text="◀️ Back", callback_data="squad:list")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
