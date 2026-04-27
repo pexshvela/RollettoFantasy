@@ -353,12 +353,17 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
 
-    # Delete the inline result message, then send fresh squad menu
+    # Collapse the inline result message to just a confirmation line
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(
+            "✅ <b>" + p["name"] + "</b> added to squad.",
+            parse_mode="HTML",
+            reply_markup=None
+        )
     except Exception:
         pass
 
+    # Send fresh squad menu as new message
     await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=False)
 
 
