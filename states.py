@@ -16,6 +16,7 @@ class Squad(StatesGroup):
     picking_bench = State()
     captain     = State()
     review      = State()
+    searching   = State()
 
 
 class Transfer(StatesGroup):
