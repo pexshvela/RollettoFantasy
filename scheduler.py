@@ -206,7 +206,7 @@ async def award_points(match: dict, bot=None):
             logger.debug("Matched '%s' -> '%s'", api_name, find_player_by_name(api_name)["name"])
 
     # Find gameweek by match date
-    match_date = match.get("date", "")
+    match_date = match.get("date", "") or match.get("match_date", "")
     all_gws    = await sheets.get_all_gameweeks()
     gw_id      = 0
 
