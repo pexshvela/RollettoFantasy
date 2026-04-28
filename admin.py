@@ -639,9 +639,17 @@ async def cmd_recalculate(message: Message, state: FSMContext):
             lang = fresh_user.get("language", "en")
             text = await _home_text(fresh_user, lang)
             from inline import home_keyboard
+            from registration import _last_home_msg
             tournament = await sheets.get_tournament()
             kb = home_keyboard(lang, tournament)
-            await message.bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+            # Delete old home message if tracked
+            if uid in _last_home_msg:
+                try:
+                    await message.bot.delete_message(uid, _last_home_msg[uid])
+                except Exception:
+                    pass
+            sent = await message.bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+            _last_home_msg[uid] = sent.message_id
         except Exception as e:
             logger.warning("Could not push home to %s: %s", uid, e)
 
