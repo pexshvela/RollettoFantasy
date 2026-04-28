@@ -870,7 +870,7 @@ def get_players_by_position(pos: str) -> list:
 
 
 def find_player_by_name(name: str) -> Optional[dict]:
-    """Find player by name — handles accents and surname-first formats."""
+    """Find player by name — handles accents, full API names, and partial matches."""
     if not name:
         return None
     name_map = _UCL_NAME if _active == "ucl" else _PL_NAME
@@ -878,25 +878,42 @@ def find_player_by_name(name: str) -> Optional[dict]:
 
     nl = name.lower().strip()
     nn = _norm(name)
+    parts = nn.split()
 
-    # Direct match
+    # 1. Direct full name match
     if nl in name_map: return name_map[nl]
     if nn in norm_map: return norm_map[nn]
 
-    # Try reversed: "Kane H." → "h. kane"
-    parts = nn.split()
+    # 2. Try first + last only (skip middle names)
+    if len(parts) >= 2:
+        first_last = parts[0] + " " + parts[-1]
+        if first_last in norm_map: return norm_map[first_last]
+
+    # 3. Try last name only (strong match — must be unique enough, len > 3)
+    if len(parts) >= 1:
+        last = parts[-1]
+        if len(last) > 3 and last in norm_map:
+            return norm_map[last]
+
+    # 4. Try reversed 2-word: "Fernandes Bruno"
     if len(parts) == 2:
         rev = parts[1] + " " + parts[0]
         if rev in norm_map: return norm_map[rev]
 
-    # Partial match on any part > 2 chars
-    for part in parts:
-        part = part.strip(".")
-        if len(part) > 2:
-            if part in norm_map: return norm_map[part]
+    # 5. Match if our player's full raw name contains ALL parts of the API name
+    for key, p in norm_map.items():
+        key_parts = key.split()
+        if all(pt in key_parts for pt in parts if len(pt) > 2):
+            return p
+
+    # 6. Last name substring match (only if last name is long enough to be unique)
+    if len(parts) >= 1:
+        last = parts[-1]
+        if len(last) >= 5:
             for key, p in norm_map.items():
-                if part in key or key in part:
+                if last in key.split():
                     return p
+
     return None
 
 
