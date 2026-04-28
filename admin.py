@@ -625,6 +625,25 @@ async def cmd_recalculate(message: Message, state: FSMContext):
         reprocessed += 1
 
     await message.answer(f"✅ Recalculated {reprocessed} matches for gameweek {gw_id}.")
+    # Broadcast updated points to all confirmed users
+    users = await sheets.get_all_users()
+    for u in users:
+        uid = int(u["telegram_id"])
+        try:
+            from registration import _home_text, home_keyboard
+            from inline import home_keyboard as hk
+            import config as _cfg
+            fresh_user = await sheets.get_user(uid)
+            if not fresh_user:
+                continue
+            lang = fresh_user.get("language", "en")
+            text = await _home_text(fresh_user, lang)
+            from inline import home_keyboard
+            tournament = await sheets.get_tournament()
+            kb = home_keyboard(lang, tournament)
+            await message.bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+        except Exception as e:
+            logger.warning("Could not push home to %s: %s", uid, e)
 
 
 # ── Admin panel callbacks ─────────────────────────────────────────────────────
