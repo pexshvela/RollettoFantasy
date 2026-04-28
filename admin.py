@@ -260,6 +260,7 @@ async def cmd_gameweeks(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     gws = await sheets.get_all_gameweeks()
+    gws = sorted(gws, key=lambda g: g.get("start_date", ""))
     if not gws:
         await message.answer("No gameweeks yet. Run /fixtures first.")
         return
