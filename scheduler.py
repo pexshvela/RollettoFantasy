@@ -192,7 +192,18 @@ async def award_points(match: dict, bot=None):
         bot_player_stats[bot_player["id"]] = stats
 
     logger.info("Matched %d/%d players for %s vs %s",
-                len(bot_player_stats), len(player_stats_raw) // 2, home_team, away_team)
+                len(bot_player_stats), len(player_stats_raw), home_team, away_team)
+
+    # Log unmatched players for debugging
+    for key, stats in player_stats_raw.items():
+        api_name = stats.get("name", "")
+        pid_norm = _norm(api_name)
+        matched  = any(p["name"] == find_player_by_name(api_name)["name"]
+                       for p in [find_player_by_name(api_name)] if p)                    if find_player_by_name(api_name) else False
+        if not find_player_by_name(api_name):
+            logger.warning("NO MATCH for API player: '%s'", api_name)
+        else:
+            logger.debug("Matched '%s' -> '%s'", api_name, find_player_by_name(api_name)["name"])
 
     # Find gameweek by match date
     match_date = match.get("date", "")
@@ -255,8 +266,16 @@ async def award_points(match: dict, bot=None):
 
         for slot in starter_slots:
             pid = squad_snapshot.get(slot)
-            if not pid or pid not in bot_player_stats:
+            if not pid:
+                logger.debug("Slot %s is empty", slot)
                 continue
+            if pid not in bot_player_stats:
+                from players import get_player as _gp
+                p = _gp(pid)
+                logger.warning("Slot %s player '%s' (id=%s) not in bot_player_stats",
+                                slot, p["name"] if p else "?", pid)
+                continue
+            logger.info("Scoring slot %s: %s", slot, pid)
 
             stats      = bot_player_stats[pid]
             is_captain = pid == captain_id
