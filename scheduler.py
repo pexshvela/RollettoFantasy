@@ -13,11 +13,18 @@ from datetime import datetime, timezone, timedelta
 
 import sheets
 import football_api
-from players import get_all_players, find_player_by_name, get_player
+from players import get_all_players, find_player_by_name, get_player, set_active_tournament as _set_tournament
 from points_calculator import calc_points, build_breakdown
 import config
 
 logger = logging.getLogger(__name__)
+
+# Ensure player lookup uses correct tournament
+def _ensure_tournament():
+    try:
+        _set_tournament(config.DEFAULT_TOURNAMENT.lower())
+    except Exception:
+        pass
 
 POLL_INTERVAL    = config.SCHEDULER_POLL_MINUTES * 60
 MATCH_DUE_MIN    = config.MATCH_DUE_MINUTES * 60
@@ -85,6 +92,7 @@ async def process_match(match_id: str, cached: dict, bot=None):
     """Fetch match result and award points if finished."""
     await sheets.update_match_last_checked(match_id)
 
+    _ensure_tournament()
     details = await football_api.get_match_details(match_id)
     if not details:
         logger.warning("Could not fetch match %s", match_id)
