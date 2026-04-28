@@ -132,7 +132,20 @@ async def award_points(match: dict, bot=None):
     away_tid   = match.get("away_team_id", "")
 
     player_stats_raw = match.get("player_stats") or {}
-    played_ids       = match.get("played_ids") or set()
+    played_ids       = set(match.get("played_ids") or set())
+
+    # Also add players from lineups home/away starters and subs to played_ids
+    # This handles cases where player_stats has 0 minutes but player actually played
+    lineups = match.get("lineups") or {}
+    for side in ("home", "away"):
+        for entry in lineups.get(f"{side}_starters", []):
+            pid = str(entry.get("player_id", "")) if isinstance(entry, dict) else str(entry)
+            if pid:
+                played_ids.add(pid)
+        for entry in lineups.get(f"{side}_subs", []):
+            pid = str(entry.get("player_id", "")) if isinstance(entry, dict) else str(entry)
+            if pid:
+                played_ids.add(pid)
 
     # Build team side map
     team_side = {}
