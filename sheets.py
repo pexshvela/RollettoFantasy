@@ -138,6 +138,15 @@ async def update_user(telegram_id: int, **kwargs):
         logger.error("update_user error: %s", e)
 
 
+async def get_user_by_rolletto_username(username: str) -> dict | None:
+    """Check if a rolletto username is already registered to any telegram_id."""
+    try:
+        res = _get_sb().table("users").select("*").ilike("username", username.strip()).execute()
+        return res.data[0] if res.data else None
+    except Exception:
+        return None
+
+
 async def get_all_users() -> list[dict]:
     try:
         res = _get_sb().table("users").select("*").execute()
