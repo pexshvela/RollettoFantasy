@@ -40,7 +40,7 @@ LEAGUE_IDS = {
 }
 
 # Default active tournament
-DEFAULT_TOURNAMENT = os.getenv("DEFAULT_TOURNAMENT", "ucl")
+DEFAULT_TOURNAMENT = os.getenv("DEFAULT_TOURNAMENT", "pl")
 
 # Scheduler
 SCHEDULER_POLL_MINUTES  = 5
