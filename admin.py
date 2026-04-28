@@ -566,10 +566,16 @@ async def cmd_recalculate(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     parts = message.text.strip().split()
-    if len(parts) < 2:
-        await message.answer("Usage: /recalculate GAMEWEEK_ID")
+    # Accept: /recalculate 3  OR  /recalculate GW 3  OR  /recalculate GW3
+    gw_id = None
+    for p in parts[1:]:
+        p = p.upper().replace("GW", "").strip()
+        if p.isdigit():
+            gw_id = int(p)
+            break
+    if not gw_id:
+        await message.answer("Usage: /recalculate 3  (or /recalculate GW3)")
         return
-    gw_id = int(parts[1])
     await message.answer(f"🔄 Recalculating gameweek {gw_id}...")
 
     # Get all processed matches for this gameweek
