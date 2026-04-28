@@ -175,12 +175,17 @@ async def award_points(match: dict, bot=None):
         _in_lineup_by_name = False
         if api_name:
             _nm = api_name.lower().strip()
+            # Also check last name only (handles "M. Cunha" vs "Matheus Cunha")
+            _last = _nm.split()[-1] if _nm.split() else ""
             for _side2 in ("home", "away"):
                 for _entry in (lineups.get(f"{_side2}_starters", []) +
                                lineups.get(f"{_side2}_subs", [])):
-                    if isinstance(_entry, dict) and _entry.get("name","").lower().strip() == _nm:
-                        _in_lineup_by_name = True
-                        break
+                    if isinstance(_entry, dict):
+                        _eln = _entry.get("name","").lower().strip()
+                        _elast = _eln.split()[-1] if _eln.split() else ""
+                        if _eln == _nm or (_last and len(_last) > 3 and _last == _elast):
+                            _in_lineup_by_name = True
+                            break
         actually_played = (
             (api_pid and api_pid in played_ids) or
             stats.get("in_lineup", False) or
@@ -206,7 +211,10 @@ async def award_points(match: dict, bot=None):
                 bot_player = None
 
         if not bot_player:
-            logger.debug("No bot_player for API name '%s' (team_id=%s, side=%s)", api_name, api_team_id, side)
+            if api_name in ("Matheus Cunha","M. Cunha","Matthew Cox","Nicolas Senesi"):
+                logger.warning("REJECTED '%s': side=%s bp_side_check failed", api_name, side)
+            else:
+                logger.debug("No bot_player for API name '%s'", api_name)
             continue
 
         # Set clean sheet and goals conceded
@@ -220,7 +228,11 @@ async def award_points(match: dict, bot=None):
 
         # If player is confirmed as played (in lineup/played_ids) but API shows 0 mins,
         # set minutes to 1 so appearance points are awarded
-        if not stats.get("minutes_played") and (api_pid in played_ids or stats.get("in_lineup")):
+        if not stats.get("minutes_played") and (
+            api_pid in played_ids or
+            stats.get("in_lineup") or
+            _in_lineup_by_name
+        ):
             stats = dict(stats)
             stats["minutes_played"] = 1
         bot_player_stats[bot_player["id"]] = stats
