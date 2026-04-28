@@ -120,7 +120,6 @@ async def create_user(telegram_id: int, username: str, language: str) -> dict:
         "username":      username,
         "language":      language,
         "total_points":  0,
-        "confirmed":     False,
         "captain":       "",
         "formation":     "",
     }
@@ -593,7 +592,7 @@ async def reset_user(telegram_id: int):
         sb.table("transfers").delete().eq("telegram_id", telegram_id).execute()
         sb.table("player_match_points").delete().eq("telegram_id", telegram_id).execute()
         sb.table("users").update({
-            "total_points": 0, "confirmed": False,
+            "total_points": 0,
             "captain": "", "formation": "",
         }).eq("telegram_id", telegram_id).execute()
     except Exception as e:
@@ -611,7 +610,7 @@ async def reset_all():
         sb.table("match_cache").delete().neq("match_id", "").execute()
         sb.table("gameweeks").delete().neq("id", 0).execute()
         sb.table("users").update({
-            "total_points": 0, "confirmed": False,
+            "total_points": 0,
             "captain": "", "formation": "",
         }).neq("telegram_id", 0).execute()
     except Exception as e:
