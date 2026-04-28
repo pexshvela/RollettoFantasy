@@ -171,10 +171,21 @@ async def award_points(match: dict, bot=None):
         api_pid     = stats.get("player_id", "")
 
         # Only players who played
+        # Also check lineup names for players with 0 minutes
+        _in_lineup_by_name = False
+        if api_name:
+            _nm = api_name.lower().strip()
+            for _side2 in ("home", "away"):
+                for _entry in (lineups.get(f"{_side2}_starters", []) +
+                               lineups.get(f"{_side2}_subs", [])):
+                    if isinstance(_entry, dict) and _entry.get("name","").lower().strip() == _nm:
+                        _in_lineup_by_name = True
+                        break
         actually_played = (
             (api_pid and api_pid in played_ids) or
             stats.get("in_lineup", False) or
-            minutes > 0
+            minutes > 0 or
+            _in_lineup_by_name
         )
         if not actually_played:
             if api_name in ("Matthew Cox","Kristoffer Ajer","Nicolas Senesi","Josh Dasilva","Matheus Cunha","Noussair Mazraoui"):
@@ -207,6 +218,11 @@ async def award_points(match: dict, bot=None):
             stats["goals_conceded"] = home_score
             stats["clean_sheet"]    = home_score == 0
 
+        # If player is confirmed as played (in lineup/played_ids) but API shows 0 mins,
+        # set minutes to 1 so appearance points are awarded
+        if not stats.get("minutes_played") and (api_pid in played_ids or stats.get("in_lineup")):
+            stats = dict(stats)
+            stats["minutes_played"] = 1
         bot_player_stats[bot_player["id"]] = stats
 
     logger.info("Matched %d/%d players for %s vs %s",
