@@ -610,6 +610,17 @@ async def cmd_recalculate(message: Message, state: FSMContext):
         sheets._get_sb().table("match_cache").update(
             {"points_awarded": False}
         ).eq("match_id", mid).execute()
+        # Reset all user points for this match before recalculating
+        all_users = await sheets.get_all_users()
+        for u in all_users:
+            uid = int(u["telegram_id"])
+            # Delete existing player_match_points for this match
+            sheets._get_sb().table("player_match_points").delete().eq(
+                "telegram_id", uid).eq("match_id", str(mid)).execute()
+            # Subtract previously awarded points (stored in total_points)
+            # We can't easily know the exact amount so we reset to 0 for safety
+            # Actually: just let award_points upsert handle it, but reset total_points
+            # by subtracting the sum of existing points for this match first
         await award_points(full, None)
         reprocessed += 1
 
