@@ -251,10 +251,32 @@ async def award_points(match: dict, bot=None):
             continue  # Not confirmed → 0 points
 
         squad_snapshot = confirmation.get("squad_snapshot") or {}
+
+        # Validate that snapshot IDs are current hash-based IDs
+        # Old IDs look like "gk_b43454" (index-based), new ones like "gk_a1b2c3d4" (MD5 hash)
+        # Check by trying to look up a player - if none found, use current DB squad
+        if squad_snapshot:
+            from players import get_player as _gp
+            valid_ids = [v for v in squad_snapshot.values()
+                        if isinstance(v, str) and v and _gp(v)]
+            if not valid_ids:
+                logger.warning("User %s: snapshot has unrecognized player IDs — using DB squad", uid)
+                squad_snapshot = {}
+
         if not squad_snapshot:
             # Fallback: use current squad from DB
             db_squad = await sheets.get_squad(uid)
             squad_snapshot = db_squad or {}
+
+            # Validate DB squad too
+            if squad_snapshot:
+                from players import get_player as _gp2
+                valid_db = [v for v in squad_snapshot.values()
+                           if isinstance(v, str) and v and _gp2(v)]
+                if valid_db:
+                    logger.info("User %s: using DB squad with %d valid players", uid, len(valid_db))
+                else:
+                    logger.warning("User %s: DB squad also has invalid IDs!", uid)
 
         captain_id = user_row.get("captain", "")
         formation  = user_row.get("formation", "4-3-3")
