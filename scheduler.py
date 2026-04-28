@@ -193,10 +193,6 @@ async def award_points(match: dict, bot=None):
             _in_lineup_by_name
         )
         if not actually_played:
-            if api_name in ("Matthew Cox","Kristoffer Ajer","Nicolas Senesi","Josh Dasilva","Matheus Cunha","Noussair Mazraoui"):
-                logger.warning("SKIP %s: pid=%s in_played=%s in_lineup=%s mins=%s played_ids_sample=%s",
-                    api_name, api_pid, api_pid in played_ids if api_pid else False,
-                    stats.get("in_lineup"), minutes, list(played_ids)[:3])
             continue
 
         side = team_side.get(api_team_id, "")
@@ -211,10 +207,6 @@ async def award_points(match: dict, bot=None):
                 bot_player = None
 
         if not bot_player:
-            if api_name in ("Matheus Cunha","M. Cunha","Matthew Cox","Nicolas Senesi"):
-                logger.warning("REJECTED '%s': side=%s bp_side_check failed", api_name, side)
-            else:
-                logger.debug("No bot_player for API name '%s'", api_name)
             continue
 
         # Set clean sheet and goals conceded
@@ -358,10 +350,15 @@ async def award_points(match: dict, bot=None):
             await sheets.save_player_points(uid, pid, mid, gw_id, final_pts, breakdown)
             user_total += final_pts
 
-        if user_total != 0:
-            current = int(float(user_row.get("total_points") or 0))
-            await sheets.update_user(uid, total_points=current + user_total)
-            updated += 1
+        # Get sum of previously saved points for this match to avoid double-counting
+        existing_rows = sheets._get_sb().table("player_match_points").select(
+            "points").eq("telegram_id", uid).eq("match_id", str(mid)).execute()
+        existing_total = sum(int(r.get("points", 0)) for r in (existing_rows.data or []))
+
+        current = int(float(user_row.get("total_points") or 0))
+        new_total = max(0, current - existing_total + user_total)
+        await sheets.update_user(uid, total_points=new_total)
+        updated += 1
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
     await sheets.mark_match_points_awarded(mid)
