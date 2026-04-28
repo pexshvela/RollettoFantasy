@@ -612,7 +612,6 @@ async def cmd_recalculate(message: Message, state: FSMContext):
         ).eq("match_id", mid).execute()
         await award_points(full, None)
         reprocessed += 1
-            reprocessed += 1
 
     await message.answer(f"✅ Recalculated {reprocessed} matches for gameweek {gw_id}.")
 
