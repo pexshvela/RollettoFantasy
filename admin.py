@@ -183,6 +183,11 @@ async def cmd_fixtures(message: Message, state: FSMContext):
     tournament = await sheets.get_tournament()
     pl_module.set_active_tournament(tournament)
 
+    # Clear existing gameweeks and match cache before repopulating
+    await message.answer("🗑 Clearing old gameweeks and match cache...")
+    sheets._get_sb().table("gameweeks").delete().neq("id", 0).execute()
+    sheets._get_sb().table("match_cache").delete().neq("match_id", "").execute()
+
     matches = await football_api.get_all_fixtures(tournament)
     if not matches:
         await message.answer("❌ No fixtures found. Check API key and tournament setting.")
