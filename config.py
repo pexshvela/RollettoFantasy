@@ -35,7 +35,7 @@ TOURNAMENT_PL  = "pl"
 
 # api-football league IDs
 LEAGUE_IDS = {
-    "ucl": {"league": 2,  "season": 2024},  # UCL 2024/25
+    "ucl": {"league": 2,  "season": 2025},  # UCL 2025/26
     "pl":  {"league": 39, "season": 2025},  # PL 2025/26
 }
 
