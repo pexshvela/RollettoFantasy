@@ -8,9 +8,13 @@ from typing import Optional
 
 
 def _norm(s: str) -> str:
-    """Normalize accents: Dembélé→Dembele, Ødegaard→Odegaard etc."""
+    """Normalize accents and special chars for matching."""
+    for ch, rep in [("\u0131","i"),("\u0130","i"),("\u011f","g"),("\u011e","g"),
+                    ("\u015f","s"),("\u015e","s"),("\u00e7","c"),("\u00c7","c"),
+                    ("\u00f6","o"),("\u00d6","o"),("\u00fc","u"),("\u00dc","u"),
+                    ("\u00f1","n"),("\u00d1","n")]:
+        s = s.replace(ch, rep)
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
-
 
 # ── UCL Players (Arsenal, PSG, Atletico Madrid, Bayern Munich) ────────────────
 
@@ -551,6 +555,8 @@ PL_PLAYERS_RAW = [
     {"name": "Tyrell Johannes Chicco Malacia", "team": "Man Utd", "pos": "DEF", "price": 4000000},
     {"name": "Lisandro Martinez", "team": "Man Utd", "pos": "DEF", "price": 6500000},
     {"name": "Noussair Mazraoui", "team": "Man Utd", "pos": "DEF", "price": 5500000},
+    {"name": "Kobbie Mainoo", "team": "Man Utd", "pos": "MF", "price": 5500000},
+    {"name": "Leny Yoro", "team": "Man Utd", "pos": "DEF", "price": 5000000},
     {"name": "Bryan Tetsadong Marceau Mbeumo", "team": "Man Utd", "pos": "FW", "price": 8500000},
     {"name": "Dermot William Mee", "team": "Man Utd", "pos": "MF", "price": 5000000},
     {"name": "Mason Tony Mount", "team": "Man Utd", "pos": "MF", "price": 5500000},
@@ -883,6 +889,14 @@ def find_player_by_name(name: str) -> Optional[dict]:
     # 1. Direct full name match
     if nl in name_map: return name_map[nl]
     if nn in norm_map: return norm_map[nn]
+
+    # 1b. Match against display names (from _NAME_OVERRIDES values)
+    #     e.g. API sends "Casemiro" which is the display name
+    all_players = _PL_ALL if _active == "pl" else _UCL_ALL
+    for pid, p in all_players.items():
+        display = _norm(p["name"])
+        if display == nn:
+            return p
 
     # 2. Try first + last only (skip middle names)
     if len(parts) >= 2:
