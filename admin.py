@@ -185,8 +185,18 @@ async def cmd_fixtures(message: Message, state: FSMContext):
 
     # Clear existing gameweeks and match cache before repopulating
     await message.answer("🗑 Clearing old gameweeks and match cache...")
-    sheets._get_sb().table("gameweeks").delete().neq("id", 0).execute()
-    sheets._get_sb().table("match_cache").delete().neq("match_id", "").execute()
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None,
+            lambda: sheets._get_sb().table("gameweeks").delete().gte("id", 0).execute())
+    except Exception:
+        pass
+    try:
+        await loop.run_in_executor(None,
+            lambda: sheets._get_sb().table("match_cache").delete().neq("match_id", "x").execute())
+    except Exception:
+        pass
 
     matches = await football_api.get_all_fixtures(tournament)
     if not matches:
