@@ -329,6 +329,8 @@ async def save_match_cache(match: dict):
             "match_id":          match["id"],
             "home_team":         match.get("home_team", ""),
             "away_team":         match.get("away_team", ""),
+            "home_team_id":      str(match.get("home_team_id", "") or ""),
+            "away_team_id":      str(match.get("away_team_id", "") or ""),
             "home_score":        match.get("home_score", 0),
             "away_score":        match.get("away_score", 0),
             "status":            match.get("status", "scheduled"),
