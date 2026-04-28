@@ -586,8 +586,11 @@ async def cmd_recalculate(message: Message, state: FSMContext):
 
     # Find matches on this gameweek's date
     matches_on_date = await sheets.get_recent_matches(days=90)
+    FINAL_STATUSES = {"final", "ft", "match finished", "aet", "pen", "finished"}
     gw_matches = [m for m in matches_on_date
-                  if m.get("match_date") == gw.get("start_date") and m.get("status") == "final"]
+                  if m.get("match_date") == gw.get("start_date")
+                  and (str(m.get("status","")).lower() in FINAL_STATUSES
+                       or m.get("home_score") is not None)]
 
     if not gw_matches:
         await message.answer("No finished matches found for this gameweek.")
