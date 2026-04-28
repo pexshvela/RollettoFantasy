@@ -80,8 +80,20 @@ async def enter_username(message: Message, state: FSMContext):
         )
         return
 
+    # Check if this rolletto username is already taken by another Telegram ID
+    uid = message.from_user.id
+    existing = await sheets.get_user_by_rolletto_username(username)
+    if existing and int(existing.get("telegram_id", 0)) != uid:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔄 Try Again", callback_data="reg:retry")
+        kb.adjust(1)
+        await message.answer(
+            "❌ This Rolletto username is already registered to another account. Please use your own username.",
+            reply_markup=kb.as_markup()
+        )
+        return
+
     # Create user
-    uid  = message.from_user.id
     user = await sheets.create_user(uid, username, lang)
 
     # Set active tournament
