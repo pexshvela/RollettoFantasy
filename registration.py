@@ -139,8 +139,15 @@ async def go_home(callback: CallbackQuery, state: FSMContext):
 
 async def _show_home(message: Message, user: dict, lang: str):
     text = await _home_text(user, lang)
-    uid = user.get("telegram_id", 0)
-    await message.answer(text, parse_mode="HTML", reply_markup=home_keyboard(lang, is_admin=int(uid) == _config.ADMIN_ID))
+    uid = int(user.get("telegram_id", 0))
+    # Delete old home message if tracked
+    if uid in _last_home_msg:
+        try:
+            await message.bot.delete_message(uid, _last_home_msg[uid])
+        except Exception:
+            pass
+    sent = await message.answer(text, parse_mode="HTML", reply_markup=home_keyboard(lang, is_admin=uid == _config.ADMIN_ID))
+    _last_home_msg[uid] = sent.message_id
 
 
 async def _edit_home(message: Message, user: dict, lang: str):
@@ -151,6 +158,10 @@ async def _edit_home(message: Message, user: dict, lang: str):
         await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+# Track last home message ID per user (in-memory)
+_last_home_msg: dict[int, int] = {}
 
 
 async def _home_text(user: dict, lang: str) -> str:
