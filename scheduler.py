@@ -259,9 +259,13 @@ async def award_points(match: dict, bot=None):
         captain_id = user_row.get("captain", "")
         formation  = user_row.get("formation", "4-3-3")
 
+        logger.info("User %s: formation=%s captain=%s snap_keys=%s",
+                    uid, formation, captain_id, list(squad_snapshot.keys())[:5])
+
         # Get starter slots using formation-aware helper
         from helpers import get_starter_slots
         starter_slots = get_starter_slots(formation)
+        logger.info("User %s: starter_slots=%s", uid, starter_slots)
         user_total    = 0
 
         for slot in starter_slots:
