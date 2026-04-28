@@ -322,10 +322,7 @@ async def award_points(match: dict, bot=None):
         logger.info("User %s: formation=%s captain=%s snap_keys=%s",
                     uid, formation, captain_id, list(squad_snapshot.keys())[:5])
 
-        # Read existing points for this match BEFORE scoring (to correctly compute delta)
-        _prev_rows = sheets._get_sb().table("player_match_points").select(
-            "points").eq("telegram_id", uid).eq("match_id", str(mid)).execute()
-        prev_total = sum(int(r.get("points", 0)) for r in (_prev_rows.data or []))
+        prev_total = 0  # Will be populated if needed
 
         # Get starter slots using formation-aware helper
         from helpers import get_starter_slots
@@ -355,9 +352,11 @@ async def award_points(match: dict, bot=None):
             await sheets.save_player_points(uid, pid, mid, gw_id, final_pts, breakdown)
             user_total += final_pts
 
-        current = int(float(user_row.get("total_points") or 0))
-        new_total = max(0, current - prev_total + user_total)
-        await sheets.update_user(uid, total_points=new_total)
+        # Compute total from ALL player_match_points for this user (source of truth)
+        all_pts_rows = sheets._get_sb().table("player_match_points").select(
+            "points").eq("telegram_id", uid).execute()
+        absolute_total = sum(int(r.get("points", 0)) for r in (all_pts_rows.data or []))
+        await sheets.update_user(uid, total_points=absolute_total)
         updated += 1
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
