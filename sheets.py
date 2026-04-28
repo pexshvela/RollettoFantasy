@@ -442,7 +442,7 @@ async def save_player_points(telegram_id: int, player_id: str,
             "gameweek_id":  gameweek_id,
             "points":       points,
             "breakdown":    json.dumps(breakdown),
-        }).execute()
+        }, on_conflict="telegram_id,player_id,match_id").execute()
     except Exception as e:
         logger.error("save_player_points error: %s", e)
 
