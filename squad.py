@@ -370,16 +370,20 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("✅ " + p["name"] + " added!", show_alert=False)
 
-    # For inline query results, callback.message is None
-    # Use bot.send_message directly with the user's chat_id
     chat_id = callback.from_user.id
+    is_inline = callback.message is None
 
-    # Delete old squad menu if we have it stored
-    if chat_id in _squad_menu_msg:
-        try:
-            await callback.bot.delete_message(chat_id, _squad_menu_msg[chat_id])
-        except Exception:
-            pass
+    if is_inline:
+        # Inline pick: delete old menu and send new one
+        if chat_id in _squad_menu_msg:
+            try:
+                await callback.bot.delete_message(chat_id, _squad_menu_msg[chat_id])
+            except Exception:
+                pass
+    else:
+        # Normal button pick: just use _show_squad_menu with edit=True
+        await _show_squad_menu(callback.message, lang, formation, squad, captain, edit=True)
+        return
 
     # Build and send new squad menu directly
     from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
@@ -607,6 +611,7 @@ async def change_squad(callback: CallbackQuery, state: FSMContext):
         reply_markup=formation_keyboard(lang)
     )
     await state.set_state(Squad.formation)
+    await state.update_data(captain="")  # Clear captain when rebuilding
     await callback.answer()
 
 
