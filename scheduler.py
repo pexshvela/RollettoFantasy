@@ -164,6 +164,10 @@ async def award_points(match: dict, bot=None):
             minutes > 0
         )
         if not actually_played:
+            if api_name in ("Matthew Cox","Kristoffer Ajer","Nicolas Senesi","Josh Dasilva","Matheus Cunha","Noussair Mazraoui"):
+                logger.warning("SKIP %s: pid=%s in_played=%s in_lineup=%s mins=%s played_ids_sample=%s",
+                    api_name, api_pid, api_pid in played_ids if api_pid else False,
+                    stats.get("in_lineup"), minutes, list(played_ids)[:3])
             continue
 
         side = team_side.get(api_team_id, "")
@@ -178,6 +182,7 @@ async def award_points(match: dict, bot=None):
                 bot_player = None
 
         if not bot_player:
+            logger.debug("No bot_player for API name '%s' (team_id=%s, side=%s)", api_name, api_team_id, side)
             continue
 
         # Set clean sheet and goals conceded
