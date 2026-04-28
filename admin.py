@@ -598,14 +598,20 @@ async def cmd_recalculate(message: Message, state: FSMContext):
 
     reprocessed = 0
     from scheduler import award_points
+    import football_api as _fapi
     for m in gw_matches:
-        if m.get("player_stats"):
-            m["id"] = m["match_id"]
-            m["points_awarded"] = False
-            sheets._get_sb().table("match_cache").update(
-                {"points_awarded": False}
-            ).eq("match_id", m["match_id"]).execute()
-            await award_points(m, None)
+        mid = m["match_id"]
+        # Always fetch fresh data from API for recalculation
+        full = await _fapi.fetch_full_match(str(mid))
+        if not full:
+            await message.answer(f"⚠️ Could not fetch fresh data for match {mid}")
+            continue
+        full["points_awarded"] = False
+        sheets._get_sb().table("match_cache").update(
+            {"points_awarded": False}
+        ).eq("match_id", mid).execute()
+        await award_points(full, None)
+        reprocessed += 1
             reprocessed += 1
 
     await message.answer(f"✅ Recalculated {reprocessed} matches for gameweek {gw_id}.")
