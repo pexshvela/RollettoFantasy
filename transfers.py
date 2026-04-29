@@ -200,9 +200,9 @@ async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
     # Apply point cost
     if cost > 0:
         current_pts = int(user.get("total_points") or 0)
-        await sheets.update_user(uid, total_points=current_pts - cost, confirmed=False)
+        await sheets.update_user(uid, total_points=current_pts - cost)
     else:
-        await sheets.update_user(uid, confirmed=False)
+        pass  # no point cost for free transfers
 
     p_out = get_player(pid_out)
     p_in  = get_player(pid_in)
