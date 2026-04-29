@@ -145,7 +145,7 @@ async def award_points(match: dict, bot=None):
         for entry in lineups.get(f"{side}_subs", []):
             pid = str(entry.get("player_id", "")) if isinstance(entry, dict) else str(entry)
             # Only add subs if they have actual minutes in player_stats (came on)
-            if pid and any(str(ps.get("player_id","")) == pid and int(ps.get("minutes_played") or 0) > 0
+            if pid and any(isinstance(ps, dict) and str(ps.get("player_id","")) == pid and int(ps.get("minutes_played") or 0) > 0
                            for ps in player_stats_raw):
                 played_ids.add(pid)
 
