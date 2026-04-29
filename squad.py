@@ -235,8 +235,9 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
         kb = InlineKeyboardBuilder()
         if confirmed:
             if before_dl:
-                kb.button(text="⭐ Change Captain", callback_data="squad:pick_captain")
-                kb.button(text="🔄 Change Team",    callback_data="squad:change_confirmed")
+                kb.button(text="⭐ Change Captain",   callback_data="squad:pick_captain")
+                kb.button(text=t(lang, "btn_swap_subs"), callback_data="squad:swap_subs")
+                kb.button(text="🔄 Change Team",       callback_data="squad:change_confirmed")
         else:
             if before_dl:
                 kb.button(text="⭐ Change Captain", callback_data="squad:pick_captain")
@@ -636,3 +637,197 @@ async def change_confirmed_squad(callback: CallbackQuery, state: FSMContext):
         )
         await state.set_state(Squad.formation)
     await callback.answer()
+
+
+# ── Swap Subs ─────────────────────────────────────────────────────────────────
+
+def _bench_slots_for(formation: str) -> list[tuple[str, str]]:
+    """Return bench slot keys and positions for a formation."""
+    all_slots = _all_slots_for(formation)
+    starters  = _starter_slots(formation)
+    return [(s, p) for s, p in all_slots if s not in starters]
+
+
+@router.callback_query(F.data == "squad:swap_subs")
+async def swap_subs_start(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
+        return
+
+    squad     = await sheets.get_squad(uid)
+    formation = (user or {}).get("formation", "4-3-3")
+
+    bench = _bench_slots_for(formation)
+    # Filter to filled bench slots only
+    bench_filled = [(s, p) for s, p in bench if squad and squad.get(s)]
+
+    if not bench_filled:
+        await callback.answer(t(lang, "swap_no_subs"), show_alert=True)
+        return
+
+    kb = InlineKeyboardBuilder()
+    for slot, pos in bench_filled:
+        pid  = squad[slot]
+        p    = get_player(pid)
+        name = p["name"] if p else slot
+        emoji = POS_EMOJI.get(pos, "")
+        kb.button(text=f"{emoji} {name}", callback_data=f"swap:pick:{slot}")
+    kb.button(text=t(lang, "back"), callback_data="home:squad")
+    kb.adjust(1)
+
+    await callback.message.edit_text(
+        t(lang, "swap_pick_sub"), parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("swap:pick:"))
+async def swap_pick_target(callback: CallbackQuery, state: FSMContext):
+    uid       = callback.from_user.id
+    user      = await sheets.get_user(uid)
+    lang      = await get_lang(uid, user)
+    sub_slot  = callback.data.split(":", 2)[2]
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
+        return
+
+    squad     = await sheets.get_squad(uid)
+    formation = (user or {}).get("formation", "4-3-3")
+
+    if not squad or not squad.get(sub_slot):
+        await callback.answer("Player not found.", show_alert=True)
+        return
+
+    sub_pid = squad[sub_slot]
+    sub_p   = get_player(sub_pid)
+    sub_pos = _slot_pos(sub_slot)
+    sub_name = sub_p["name"] if sub_p else sub_slot
+
+    # Find starter slots of same position
+    starters = _starter_slots(formation)
+    all_slots = _all_slots_for(formation)
+
+    kb = InlineKeyboardBuilder()
+    for slot, pos in all_slots:
+        if slot not in starters:
+            continue
+        if pos != sub_pos:
+            continue
+        pid  = squad.get(slot, "")
+        if not pid:
+            continue
+        p    = get_player(pid)
+        name = p["name"] if p else slot
+        emoji = POS_EMOJI.get(pos, "")
+        kb.button(text=f"{emoji} {name}", callback_data=f"swap:confirm:{sub_slot}:{slot}")
+    kb.button(text=t(lang, "back"), callback_data="squad:swap_subs")
+    kb.adjust(1)
+
+    await callback.message.edit_text(
+        t(lang, "swap_pick_target", name=sub_name),
+        parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("swap:confirm:"))
+async def swap_confirm(callback: CallbackQuery, state: FSMContext):
+    uid    = callback.from_user.id
+    user   = await sheets.get_user(uid)
+    lang   = await get_lang(uid, user)
+    parts  = callback.data.split(":")
+    # swap:confirm:sub_slot:starter_slot
+    sub_slot     = parts[2]
+    starter_slot = parts[3]
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
+        return
+
+    squad = await sheets.get_squad(uid)
+    if not squad:
+        await callback.answer("Squad not found.", show_alert=True)
+        return
+
+    sub_pid     = squad.get(sub_slot, "")
+    starter_pid = squad.get(starter_slot, "")
+    sub_p       = get_player(sub_pid)
+    starter_p   = get_player(starter_pid)
+    sub_name     = sub_p["name"] if sub_p else sub_slot
+    starter_name = starter_p["name"] if starter_p else starter_slot
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Confirm", callback_data=f"swap:do:{sub_slot}:{starter_slot}")
+    kb.button(text="❌ Cancel",  callback_data="squad:swap_subs")
+    kb.adjust(1)
+
+    await callback.message.edit_text(
+        t(lang, "swap_confirm_prompt", out=sub_name, in_=starter_name),
+        parse_mode="HTML", reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("swap:do:"))
+async def swap_do(callback: CallbackQuery, state: FSMContext):
+    uid    = callback.from_user.id
+    user   = await sheets.get_user(uid)
+    lang   = await get_lang(uid, user)
+    parts  = callback.data.split(":")
+    sub_slot     = parts[2]
+    starter_slot = parts[3]
+
+    if not await sheets.is_before_deadline():
+        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
+        return
+
+    squad = await sheets.get_squad(uid)
+    if not squad:
+        await callback.answer("Squad not found.", show_alert=True)
+        return
+
+    sub_pid     = squad.get(sub_slot, "")
+    starter_pid = squad.get(starter_slot, "")
+
+    if not sub_pid or not starter_pid:
+        await callback.answer("Player not found.", show_alert=True)
+        return
+
+    sub_p       = get_player(sub_pid)
+    starter_p   = get_player(starter_pid)
+    sub_name     = sub_p["name"] if sub_p else sub_slot
+    starter_name = starter_p["name"] if starter_p else starter_slot
+
+    # Do the swap
+    squad[sub_slot]     = starter_pid
+    squad[starter_slot] = sub_pid
+
+    # Save to DB
+    await sheets.save_squad(uid, squad)
+
+    # Also update the confirmation squad_snapshot if confirmed
+    formation = (user or {}).get("formation", "4-3-3")
+    captain   = (user or {}).get("captain", "")
+    all_gws   = await sheets.get_all_gameweeks()
+    for gw in sorted(all_gws, key=lambda g: g.get("start_date",""), reverse=True):
+        conf = await sheets.get_confirmation(uid, gw["id"])
+        if conf:
+            # Update snapshot with new swap
+            snapshot = dict(squad)
+            snapshot["captain"] = captain
+            await sheets.confirm_squad(uid, gw["id"], snapshot)
+            break
+
+    await callback.answer(t(lang, "swap_done", out=sub_name, in_=starter_name))
+    await callback.message.edit_text(
+        t(lang, "swap_done", out=sub_name, in_=starter_name),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardBuilder().button(
+            text=t(lang, "back_home"), callback_data="home:back"
+        ).as_markup()
+    )
