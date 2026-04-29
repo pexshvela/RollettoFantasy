@@ -39,12 +39,16 @@ def _norm(s: str) -> str:
 
 async def run_scheduler(bot=None):
     logger.info("Scheduler started.")
+    _first_run = True
     while True:
         try:
             await check_due_matches(bot)
-            await check_deadline_notifications(bot)
-            await check_transfer_window_notifications(bot)
-            await check_admin_reminders(bot)
+            if not _first_run:
+                # Skip notifications on startup to avoid re-sending after redeploy
+                await check_deadline_notifications(bot)
+                await check_transfer_window_notifications(bot)
+                await check_admin_reminders(bot)
+            _first_run = False
         except Exception as e:
             logger.error("Scheduler error: %s", e)
         await asyncio.sleep(POLL_INTERVAL)
@@ -393,9 +397,11 @@ async def check_deadline_notifications(bot=None):
 
     users = await sheets.get_all_users()
 
-    # 24h reminder
+    # 24h reminder — also check if we already notified by looking at how much time is left
+    # If less than 23h remain, we already sent the 24h notice (avoids re-sending on restart)
     key_24h = f"24h:{deadline}"
-    if 0 < diff <= 86400 and key_24h not in _notified_deadlines:
+    already_sent = diff <= 82800  # less than 23h left means 24h notice already went out
+    if 0 < diff <= 86400 and key_24h not in _notified_deadlines and not already_sent:
         from translations import t
         for u in users:
             lang = u.get("language", "en")
@@ -412,7 +418,8 @@ async def check_deadline_notifications(bot=None):
 
     # 1h reminder
     key_1h = f"1h:{deadline}"
-    if 0 < diff <= 3600 and key_1h not in _notified_deadlines:
+    already_sent_1h = diff <= 2400  # less than 40min left means 1h notice already went out
+    if 0 < diff <= 3600 and key_1h not in _notified_deadlines and not already_sent_1h:
         from translations import t
         for u in users:
             lang = u.get("language", "en")
