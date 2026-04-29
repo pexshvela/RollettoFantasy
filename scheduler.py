@@ -144,7 +144,9 @@ async def award_points(match: dict, bot=None):
                 played_ids.add(pid)
         for entry in lineups.get(f"{side}_subs", []):
             pid = str(entry.get("player_id", "")) if isinstance(entry, dict) else str(entry)
-            if pid:
+            # Only add subs if they have actual minutes in player_stats (came on)
+            if pid and any(str(ps.get("player_id","")) == pid and int(ps.get("minutes_played") or 0) > 0
+                           for ps in player_stats_raw):
                 played_ids.add(pid)
 
     # Build team side map
@@ -172,26 +174,10 @@ async def award_points(match: dict, bot=None):
 
         # Only players who played
         # Also check lineup names for players with 0 minutes
-        _in_lineup_by_name = False
-        if api_name:
-            _nm = api_name.lower().strip()
-            # Also check last name only (handles "M. Cunha" vs "Matheus Cunha")
-            _last = _nm.split()[-1] if _nm.split() else ""
-            for _side2 in ("home", "away"):
-                for _entry in (lineups.get(f"{_side2}_starters", []) +
-                               lineups.get(f"{_side2}_subs", [])):
-                    if isinstance(_entry, dict):
-                        _eln = _entry.get("name","").lower().strip()
-                        _elast = _eln.split()[-1] if _eln.split() else ""
-                        if _eln == _nm or (_last and len(_last) > 3 and _last == _elast):
-                            _in_lineup_by_name = True
-                            break
-        actually_played = (
-            (api_pid and api_pid in played_ids) or
-            stats.get("in_lineup", False) or
-            minutes > 0 or
-            _in_lineup_by_name
-        )
+        # Only score players who actually played (minutes > 0 from API)
+        # Lineup-based fallbacks are removed as they cause false positives
+        # (e.g. subs who were listed but never came on)
+        actually_played = minutes > 0
         if not actually_played:
             continue
 
@@ -218,15 +204,11 @@ async def award_points(match: dict, bot=None):
             stats["goals_conceded"] = home_score
             stats["clean_sheet"]    = home_score == 0
 
-        # If player is confirmed as played (in lineup/played_ids) but API shows 0 mins,
-        # set minutes to 1 so appearance points are awarded
-        if not stats.get("minutes_played") and (
-            api_pid in played_ids or
-            stats.get("in_lineup") or
-            _in_lineup_by_name
-        ):
-            stats = dict(stats)
-            stats["minutes_played"] = 1
+        # If player has NO stats entry at all (not tracked by API) but is confirmed
+        # as a starter via lineup data, give them 1 minute so appearance pts are awarded.
+        # ONLY do this if the API has no minutes data at all (not if API explicitly says 0)
+        # stats.get("minutes_played") is None means no data; 0 means API says didn't play
+        # No minutes override needed - trust API data directly
         bot_player_stats[bot_player["id"]] = stats
 
     logger.info("Matched %d/%d players for %s vs %s",
