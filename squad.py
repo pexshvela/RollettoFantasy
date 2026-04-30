@@ -583,9 +583,13 @@ async def confirm_squad(callback: CallbackQuery, state: FSMContext):
     await sheets.save_squad(uid, dict(squad, formation=formation))
     await sheets.confirm_squad(uid, gw["id"], squad)
     import config as _config
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 " + t(lang, "btn_squad"), callback_data="home:squad")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
     await callback.message.edit_text(
         t(lang, "squad_confirmed"), parse_mode="HTML",
-        reply_markup=home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
+        reply_markup=kb.as_markup()
     )
     await callback.answer()
 
@@ -818,10 +822,12 @@ async def swap_do(callback: CallbackQuery, state: FSMContext):
         await sheets.confirm_squad(uid, gw_id_to_confirm, snapshot)
 
     await callback.answer(t(lang, "swap_done", out=sub_name, in_=starter_name))
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 " + t(lang, "btn_squad"), callback_data="home:squad")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
     await callback.message.edit_text(
         t(lang, "swap_done", out=sub_name, in_=starter_name),
         parse_mode="HTML",
-        reply_markup=InlineKeyboardBuilder().button(
-            text=t(lang, "back_home"), callback_data="home:back"
-        ).as_markup()
+        reply_markup=kb.as_markup()
     )
