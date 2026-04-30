@@ -37,10 +37,13 @@ async def show_transfers(callback: CallbackQuery, state: FSMContext):
     if not window_open:
         ts = await sheets.get_transfer_settings()
         close = ts.get("close") or "N/A"
+        kb = InlineKeyboardBuilder()
+        kb.button(text=t(lang, "back_home"), callback_data="home:back")
+        kb.adjust(1)
         await callback.message.edit_text(
             t(lang, "transfers_closed"),
             parse_mode="HTML",
-            reply_markup=home_keyboard(lang)
+            reply_markup=kb.as_markup()
         )
         await callback.answer()
         return
@@ -50,9 +53,12 @@ async def show_transfers(callback: CallbackQuery, state: FSMContext):
     formation = user.get("formation", "4-3-3")
 
     if not squad or not squad_is_complete(squad, formation):
+        kb = InlineKeyboardBuilder()
+        kb.button(text=t(lang, "back_home"), callback_data="home:back")
+        kb.adjust(1)
         await callback.message.edit_text(
             t(lang, "no_squad"),
-            reply_markup=home_keyboard(lang)
+            reply_markup=kb.as_markup()
         )
         await callback.answer()
         return
@@ -220,10 +226,14 @@ async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
     name_out = p_out["name"] if p_out else pid_out
     name_in  = p_in["name"]  if p_in  else pid_in
 
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 " + t(lang, "btn_squad"), callback_data="home:squad")
+    kb.button(text=t(lang, "back_home"), callback_data="home:back")
+    kb.adjust(1)
     await callback.message.edit_text(
         t(lang, "transfer_done", **{"out": name_out, "in": name_in}),
         parse_mode="HTML",
-        reply_markup=home_keyboard(lang)
+        reply_markup=kb.as_markup()
     )
     await state.clear()
     await callback.answer()
