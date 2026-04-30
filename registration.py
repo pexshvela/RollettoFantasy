@@ -164,12 +164,28 @@ async def _show_home(message: Message, user: dict, lang: str):
 
 async def _edit_home(message: Message, user: dict, lang: str):
     text = await _home_text(user, lang)
-    uid = user.get("telegram_id", 0)
-    kb = home_keyboard(lang, is_admin=int(uid) == _config.ADMIN_ID)
+    uid = int(user.get("telegram_id", 0))
+    kb = home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
+    if message is None:
+        # message is None (inline context) — send fresh via bot directly
+        try:
+            from aiogram import Bot as _Bot
+            bot = _Bot.get_current()
+            sent = await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+            _last_home_msg[uid] = sent.message_id
+        except Exception:
+            pass
+        return
     try:
         await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        # edit failed (message too old, deleted, or from old deployment)
+        # send a fresh message instead
+        try:
+            sent = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+            _last_home_msg[uid] = sent.message_id
+        except Exception:
+            pass
 
 
 # Track last home message ID per user (in-memory)
