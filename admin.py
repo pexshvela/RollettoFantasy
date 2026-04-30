@@ -113,7 +113,37 @@ Format: open YYYY-MM-DD HH:MM close YYYY-MM-DD HH:MM free N</i>
 /recalculate GAMEWEEK_ID
 <i>Re-run points calculation for a gameweek.
 Use if stats were wrong the first time.</i>
+
+/recheck MATCH_ID
+<i>Force re-fetch a match result from the API.
+Use if a match is stuck as "upcoming" or "scheduled" after it ended.
+Example: /recheck 1540842</i>
 """
+
+
+@router.message(Command("recheck"))
+async def cmd_recheck(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Usage: /recheck MATCH_ID\nExample: /recheck 1540842")
+        return
+    match_id = parts[1].strip()
+    # Reset match cache so scheduler picks it up again
+    try:
+        sheets._get_sb().table("match_cache").update({
+            "status": "upcoming",
+            "last_checked": 0,
+            "points_awarded": False
+        }).eq("match_id", match_id).execute()
+        await message.answer(
+            f"✅ Match <code>{match_id}</code> queued for recheck.\n"
+            f"The scheduler will fetch the result within 5 minutes.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Error: {e}")
 
 
 # ── Admin panel ───────────────────────────────────────────────────────────────
