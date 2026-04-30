@@ -221,14 +221,11 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
     squad     = await sheets.get_squad(uid)
     formation = (user or {}).get("formation", "4-3-3")
     captain   = (user or {}).get("captain", "")
-    # Check confirmation across ALL gameweeks, not just active one
+    # Check confirmation - use latest confirmation across all gameweeks
     confirmed = False
-    all_gws = await sheets.get_all_gameweeks()
-    for gw in all_gws:
-        conf = await sheets.get_confirmation(uid, gw["id"])
-        if conf:
-            confirmed = True
-            break
+    conf = await sheets.get_latest_confirmation(uid)
+    if conf:
+        confirmed = True
 
     if squad and _is_complete(squad, formation):
         before_dl = await sheets.is_before_deadline()
@@ -442,17 +439,13 @@ async def search_player_prompt(callback: CallbackQuery, state: FSMContext):
 
     try:
         await callback.message.edit_text(
-        await callback.message.edit_text(
             "🔍 <b>Search player</b>\n\nType a player name:",
             parse_mode="HTML", reply_markup=kb.as_markup()
-        )
         )
     except Exception:
         await callback.message.answer(
-        await callback.message.answer(
             "🔍 <b>Search player</b>\n\nType a player name:",
             parse_mode="HTML", reply_markup=kb.as_markup()
-        )
         )
     await callback.answer()
 
