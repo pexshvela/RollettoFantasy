@@ -9,10 +9,15 @@ from typing import Optional
 
 def _norm(s: str) -> str:
     """Normalize accents and special chars for matching."""
+    # Handle chars that don't decompose well with NFKD first
     for ch, rep in [("\u0131","i"),("\u0130","i"),("\u011f","g"),("\u011e","g"),
                     ("\u015f","s"),("\u015e","s"),("\u00e7","c"),("\u00c7","c"),
                     ("\u00f6","o"),("\u00d6","o"),("\u00fc","u"),("\u00dc","u"),
-                    ("\u00f1","n"),("\u00d1","n")]:
+                    ("\u00f1","n"),("\u00d1","n"),
+                    ("\u00f8","o"),("\u00d8","o"),  # ø Ø -> o
+                    ("\u00e6","ae"),("\u00c6","ae"), # æ Æ -> ae
+                    ("\u00df","ss"),                  # ß -> ss
+                    ]:
         s = s.replace(ch, rep)
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
 
@@ -23,6 +28,8 @@ UCL_PLAYERS_RAW = [
     {"name": "Bukayo Saka",         "team": "Arsenal",  "pos": "MF", "price": 9500000},
     {"name": "Viktor Gyokeres",     "team": "Arsenal",  "pos": "FW", "price": 9000000},
     {"name": "Martin Odegaard",     "team": "Arsenal",  "pos": "MF", "price": 8500000},
+    {"name": "Ademola Lookman",       "team": "Arsenal",  "pos": "FW", "price": 7000000},
+    {"name": "Thomas Partey",          "team": "Arsenal",  "pos": "MF", "price": 6000000},
     {"name": "Gabriel Martinelli",  "team": "Arsenal",  "pos": "MF", "price": 7500000},
     {"name": "Kai Havertz",         "team": "Arsenal",  "pos": "FW", "price": 7500000},
     {"name": "Eberechi Eze",        "team": "Arsenal",  "pos": "MF", "price": 7500000},
@@ -584,7 +591,8 @@ _NAME_OVERRIDES = {
     "bruno miguel borges fernandes": "Bruno Fernandes",
     "jose diogo dalot teixeira": "Diogo Dalot",
     "ruben dos santos gato alves dias": "Ruben Dias",
-    "gabriel dos santos magalhaes": "Gabriel Magalhaes",
+    "gabriel dos santos magalhaes": "Gabriel",
+    "gabriel magalhaes": "Gabriel",
     "gabriel teodoro martinelli silva": "Gabriel Martinelli",
     "william saliba": "William Saliba",
     "bernardo mota veiga de carvalho e silva": "Bernardo Silva",
@@ -885,6 +893,11 @@ def find_player_by_name(name: str) -> Optional[dict]:
     nl = name.lower().strip()
     nn = _norm(name)
     parts = nn.split()
+
+    # 0. Check name overrides first (e.g. "Gabriel Magalhaes" -> "Gabriel")
+    if nn in _NAME_OVERRIDES:
+        override_name = _NAME_OVERRIDES[nn].lower()
+        if override_name in name_map: return name_map[override_name]
 
     # 1. Direct full name match
     if nl in name_map: return name_map[nl]
