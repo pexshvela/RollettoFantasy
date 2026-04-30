@@ -167,14 +167,7 @@ async def _edit_home(message: Message, user: dict, lang: str):
     uid = int(user.get("telegram_id", 0))
     kb = home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
     if message is None:
-        # message is None (inline context) — send fresh via bot directly
-        try:
-            from aiogram import Bot as _Bot
-            bot = _Bot.get_current()
-            sent = await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
-            _last_home_msg[uid] = sent.message_id
-        except Exception:
-            pass
+        # message is None — cannot send without a valid message object, skip silently
         return
     try:
         await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -200,12 +193,9 @@ async def _home_text(user: dict, lang: str) -> str:
     # Check confirmation via confirmations table (not user.confirmed which is unreliable)
     confirmed = False
     try:
-        all_gws = await sheets.get_all_gameweeks()
-        for gw_row in all_gws:
-            conf = await sheets.get_confirmation(int(uid), gw_row["id"])
-            if conf:
-                confirmed = True
-                break
+        conf = await sheets.get_latest_confirmation(int(uid))
+        if conf:
+            confirmed = True
     except Exception:
         pass
 
