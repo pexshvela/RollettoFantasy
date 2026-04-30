@@ -276,11 +276,23 @@ async def award_points(match: dict, bot=None):
             confirmation = await sheets.get_latest_confirmation(uid)
             if confirmation:
                 # Auto-create confirmation for current GW with same squad
-                await sheets.confirm_squad(uid, gw_id, confirmation.get("squad_snapshot") or {})
+                import json as _json
+                snap = confirmation.get("squad_snapshot") or {}
+                if isinstance(snap, str):
+                    try: snap = _json.loads(snap)
+                    except Exception: snap = {}
+                await sheets.confirm_squad(uid, gw_id, snap)
         if not confirmation:
             continue  # Never confirmed → 0 points
 
         squad_snapshot = confirmation.get("squad_snapshot") or {}
+        # Supabase sometimes returns squad_snapshot as a JSON string — parse it
+        if isinstance(squad_snapshot, str):
+            import json as _json
+            try:
+                squad_snapshot = _json.loads(squad_snapshot)
+            except Exception:
+                squad_snapshot = {}
 
         # Validate that snapshot IDs are current hash-based IDs
         # Old IDs look like "gk_b43454" (index-based), new ones like "gk_a1b2c3d4" (MD5 hash)
