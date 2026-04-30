@@ -194,9 +194,21 @@ async def confirm_squad(telegram_id: int, gameweek_id: int, squad_snapshot: dict
             "confirmed_at":    datetime.now(timezone.utc).isoformat(),
             "squad_snapshot":  json.dumps(squad_snapshot),
         }).execute()
-        await update_user(telegram_id, confirmed=True)
+        # confirmed column removed — confirmation tracked via confirmations table
     except Exception as e:
         logger.error("confirm_squad error: %s", e)
+
+
+async def get_latest_confirmation(telegram_id: int) -> Optional[dict]:
+    """Get the most recent confirmation for a user across all gameweeks."""
+    try:
+        res = _get_sb().table("confirmations").select("*").eq(
+            "telegram_id", telegram_id
+        ).order("gameweek_id", desc=True).limit(1).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error("get_latest_confirmation error: %s", e)
+        return None
 
 
 async def get_confirmation(telegram_id: int, gameweek_id: int) -> Optional[dict]:
