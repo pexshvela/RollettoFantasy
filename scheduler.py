@@ -272,7 +272,13 @@ async def award_points(match: dict, bot=None):
 
         confirmation = await sheets.get_confirmation(uid, gw_id)
         if not confirmation:
-            continue  # Not confirmed → 0 points
+            # Carry forward latest confirmation to current GW automatically
+            confirmation = await sheets.get_latest_confirmation(uid)
+            if confirmation:
+                # Auto-create confirmation for current GW with same squad
+                await sheets.confirm_squad(uid, gw_id, confirmation.get("squad_snapshot") or {})
+        if not confirmation:
+            continue  # Never confirmed → 0 points
 
         squad_snapshot = confirmation.get("squad_snapshot") or {}
 
