@@ -460,9 +460,17 @@ async def check_transfer_window_notifications(bot=None):
     ts  = await sheets.get_transfer_settings()
     now = datetime.now(timezone.utc).isoformat()
 
-    # Window just opened
+    # Window just opened — only notify if opened in the last POLL_INTERVAL seconds
     key_open = f"open:{ts.get('open','')}"
-    if ts.get("open") and ts["open"] <= now and key_open not in _notified_windows:
+    open_time = ts.get("open", "")
+    try:
+        from datetime import datetime, timezone as _tz
+        open_dt = datetime.fromisoformat(open_time.replace("Z", "+00:00")) if open_time else None
+        now_dt  = datetime.now(_tz.utc)
+        open_recent = open_dt and (now_dt - open_dt).total_seconds() < POLL_INTERVAL * 2
+    except Exception:
+        open_recent = False
+    if ts.get("open") and ts["open"] <= now and key_open not in _notified_windows and open_recent:
         users = await sheets.get_all_users()
         for u in users:
             lang = u.get("language", "en")
@@ -477,9 +485,15 @@ async def check_transfer_window_notifications(bot=None):
                 pass
         _notified_windows.add(key_open)
 
-    # Window just closed
+    # Window just closed — only notify if closed in the last POLL_INTERVAL seconds
     key_close = f"close:{ts.get('close','')}"
-    if ts.get("close") and ts["close"] <= now and key_close not in _notified_windows:
+    close_time = ts.get("close", "")
+    try:
+        close_dt   = datetime.fromisoformat(close_time.replace("Z", "+00:00")) if close_time else None
+        close_recent = close_dt and (now_dt - close_dt).total_seconds() < POLL_INTERVAL * 2
+    except Exception:
+        close_recent = False
+    if ts.get("close") and ts["close"] <= now and key_close not in _notified_windows and close_recent:
         users = await sheets.get_all_users()
         for u in users:
             lang = u.get("language", "en")
