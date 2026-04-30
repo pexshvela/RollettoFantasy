@@ -534,23 +534,38 @@ async def get_overall_leaderboard(limit: int = 20) -> list[dict]:
 
 async def get_gameweek_leaderboard(gameweek_id: int, limit: int = 20) -> list[dict]:
     try:
+        # Get all points for this gameweek
         res = _get_sb().table("player_match_points").select(
             "telegram_id,points"
         ).eq("gameweek_id", gameweek_id).execute()
+
         # Aggregate per user
         totals: dict[int, int] = {}
         for r in (res.data or []):
             uid = r["telegram_id"]
             totals[uid] = totals.get(uid, 0) + (r["points"] or 0)
-        # Get usernames
+
+        # Fetch all users in one query to avoid N+1
+        all_users_res = _get_sb().table("users").select(
+            "telegram_id,username,total_points"
+        ).execute()
+        uid_to_user = {int(u["telegram_id"]): u for u in (all_users_res.data or [])}
+
+        # Include ALL confirmed users — even those with 0 pts this GW
+        # Users not in totals get 0 for this GW
         result = []
-        for uid, pts in sorted(totals.items(), key=lambda x: -x[1])[:limit]:
-            user = await get_user(uid)
-            if user:
-                result.append({"telegram_id": uid,
-                                "username": user.get("username", "?"),
-                                "total_points": pts})
-        return result
+        for u in uid_to_user.values():
+            uid = int(u["telegram_id"])
+            pts = totals.get(uid, 0)
+            result.append({
+                "telegram_id": uid,
+                "username": u.get("username", "?"),
+                "total_points": pts
+            })
+
+        # Sort by GW points descending, limit
+        result.sort(key=lambda x: -x["total_points"])
+        return result[:limit]
     except Exception as e:
         logger.error("get_gameweek_leaderboard error: %s", e)
         return []
