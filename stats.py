@@ -146,8 +146,8 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     # Upcoming = future dates OR no status/score
     upcoming = [m for m in all_matches
                 if m.get("match_date", "") > today_str
-                or m.get("status") in ("scheduled", "Not Started", "TBD", "")
-                and m.get("home_score") in (None, 0) and m.get("away_score") in (None, 0)]
+                or (m.get("status") in ("scheduled", "Not Started", "TBD", "")
+                and m.get("home_score") in (None, 0) and m.get("away_score") in (None, 0))]
 
     # Deduplicate by match_id
     seen = set()
