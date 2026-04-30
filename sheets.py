@@ -274,10 +274,19 @@ async def count_transfers_this_gw(telegram_id: int, gameweek_id: int) -> int:
 
 async def get_active_gameweek() -> Optional[dict]:
     try:
-        res = _get_sb().table("gameweeks").select("*").in_(
-            "status", ["upcoming", "active"]
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Get the earliest gameweek whose start_date is today or in the future
+        res = _get_sb().table("gameweeks").select("*").gte(
+            "start_date", today
         ).order("start_date").limit(1).execute()
-        return res.data[0] if res.data else None
+        if res.data:
+            return res.data[0]
+        # Fallback: return the most recent past gameweek
+        res2 = _get_sb().table("gameweeks").select("*").order(
+            "start_date", desc=True
+        ).limit(1).execute()
+        return res2.data[0] if res2.data else None
     except Exception as e:
         logger.error("get_active_gameweek error: %s", e)
         return None
