@@ -950,6 +950,8 @@ def fmt_price(price: int) -> str:
 
 def mask_username(username: str) -> str:
     """Show first and last char, mask middle: 'player' → 'p****r'"""
+    if not username:
+        return "?"
     if len(username) <= 2:
         return username[0] + "*"
     return username[0] + "*" * (len(username) - 2) + username[-1]
