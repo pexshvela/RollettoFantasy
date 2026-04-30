@@ -295,9 +295,19 @@ async def cmd_gameweeks(message: Message, state: FSMContext):
         await message.answer("No gameweeks yet. Run /fixtures first.")
         return
 
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     lines = ["📅 <b>Gameweeks:</b>\n"]
     for gw in gws:
-        emoji = {"active":"🟢","upcoming":"⏳","finished":"✅"}.get(gw.get("status",""),"❓")
+        # Derive status from date rather than stored value
+        start = gw.get("start_date", "")
+        if start < today:
+            real_status = "finished"
+        elif start == today:
+            real_status = "active"
+        else:
+            real_status = "upcoming"
+        emoji = {"active":"🟢","upcoming":"⏳","finished":"✅"}.get(real_status,"❓")
         lines.append(
             f"{emoji} <b>GW {gw['id']}</b>: {gw['name']}\n"
             f"   📅 {gw.get('start_date','')} | ⏰ Deadline: {str(gw.get('deadline',''))[:16]}\n"
