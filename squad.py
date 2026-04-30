@@ -810,18 +810,19 @@ async def swap_do(callback: CallbackQuery, state: FSMContext):
     # Save to DB
     await sheets.save_squad(uid, squad)
 
-    # Also update the confirmation squad_snapshot if confirmed
-    formation = (user or {}).get("formation", "4-3-3")
-    captain   = (user or {}).get("captain", "")
-    all_gws   = await sheets.get_all_gameweeks()
-    for gw in sorted(all_gws, key=lambda g: g.get("start_date",""), reverse=True):
-        conf = await sheets.get_confirmation(uid, gw["id"])
-        if conf:
-            # Update snapshot with new swap
-            snapshot = dict(squad)
-            snapshot["captain"] = captain
-            await sheets.confirm_squad(uid, gw["id"], snapshot)
-            break
+    # Save confirmation for the current active/upcoming gameweek with the new squad
+    captain  = (user or {}).get("captain", "")
+    snapshot = dict(squad)
+    snapshot["captain"] = captain
+    # Use current active/upcoming GW, or fall back to latest existing confirmation's GW
+    active_gw = await sheets.get_active_gameweek()
+    if active_gw:
+        gw_id_to_confirm = active_gw["id"]
+    else:
+        latest_conf = await sheets.get_latest_confirmation(uid)
+        gw_id_to_confirm = latest_conf["gameweek_id"] if latest_conf else None
+    if gw_id_to_confirm:
+        await sheets.confirm_squad(uid, gw_id_to_confirm, snapshot)
 
     await callback.answer(t(lang, "swap_done", out=sub_name, in_=starter_name))
     await callback.message.edit_text(
