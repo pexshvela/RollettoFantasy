@@ -293,11 +293,18 @@ async def show_overall_lb(callback: CallbackQuery, state: FSMContext):
     my_uid = uid
 
     lines = [t(lang, "lb_overall"), ""]
+    my_in_list = False
     for i, r in enumerate(rows, 1):
         username = mask_username(r.get("username", "?"))
         pts      = r.get("total_points", 0)
-        me       = " 👈" if r.get("telegram_id") == my_uid else ""
+        is_me    = r.get("telegram_id") == my_uid
+        if is_me:
+            my_in_list = True
+        me = " 👈" if is_me else ""
         lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
+    if not my_in_list:
+        my_pts = (user or {}).get("total_points", 0)
+        lines.append(f"\n— You: <b>{my_pts} pts</b> (not in top 20)")
 
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
@@ -320,11 +327,17 @@ async def show_gw_lb(callback: CallbackQuery, state: FSMContext):
     gw_name = gw["name"] if gw else str(gw_id)
 
     lines = [t(lang, "lb_gameweek", n=gw_name), ""]
+    my_in_list = False
     for i, r in enumerate(rows, 1):
         username = mask_username(r.get("username", "?"))
         pts      = r.get("total_points", 0)
-        me       = " 👈" if r.get("telegram_id") == uid else ""
+        is_me    = r.get("telegram_id") == uid
+        if is_me:
+            my_in_list = True
+        me = " 👈" if is_me else ""
         lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
+    if not my_in_list:
+        lines.append(f"\n— You: <b>0 pts</b> this gameweek")
 
     kb = InlineKeyboardBuilder()
     kb.button(text="🏆 Overall",     callback_data="lb:overall")
