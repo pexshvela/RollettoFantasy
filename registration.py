@@ -130,8 +130,9 @@ async def enter_username(message: Message, state: FSMContext):
         )
         return
 
-    # Create user
-    user = await sheets.create_user(uid, username, lang)
+    # Create user — save both rolletto username and telegram username
+    tg_username = message.from_user.username or ""
+    user = await sheets.create_user(uid, username, lang, tg_username=tg_username)
 
     # Set active tournament
     tournament = await sheets.get_tournament()
