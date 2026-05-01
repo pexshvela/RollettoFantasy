@@ -264,19 +264,38 @@ async def award_points(match: dict, bot=None):
         return
 
     # Award points to all confirmed squads
+    import json as _json
     users   = await sheets.get_all_users()
     updated = 0
+
+    # ── OPTIMIZATION: bulk-fetch all confirmations in 2 queries instead of 2×N ──
+    # Fetch all GW-specific confirmations at once
+    gw_confs_res = sheets._get_sb().table("confirmations").select("*").eq(
+        "gameweek_id", gw_id
+    ).execute()
+    gw_confs = {int(r["telegram_id"]): r for r in (gw_confs_res.data or [])}
+
+    # Fetch latest confirmation per user (for carry-forward) in one query
+    all_confs_res = sheets._get_sb().table("confirmations").select("*").order(
+        "gameweek_id", desc=True
+    ).execute()
+    latest_confs: dict[int, dict] = {}
+    for r in (all_confs_res.data or []):
+        uid_r = int(r["telegram_id"])
+        if uid_r not in latest_confs:
+            latest_confs[uid_r] = r
+
+    user_totals_batch: dict[int, int] = {}
 
     for user_row in users:
         uid = int(user_row["telegram_id"])
 
-        confirmation = await sheets.get_confirmation(uid, gw_id)
+        confirmation = gw_confs.get(uid)
         if not confirmation:
             # Carry forward latest confirmation to current GW automatically
-            confirmation = await sheets.get_latest_confirmation(uid)
+            confirmation = latest_confs.get(uid)
             if confirmation:
                 # Auto-create confirmation for current GW with same squad
-                import json as _json
                 snap = confirmation.get("squad_snapshot") or {}
                 if isinstance(snap, str):
                     try: snap = _json.loads(snap)
@@ -334,6 +353,8 @@ async def award_points(match: dict, bot=None):
         logger.info("User %s: starter_slots=%s", uid, starter_slots)
         user_total    = 0
 
+        # Collect points rows for this user — batch upsert below
+        user_points_rows = []
         for slot in starter_slots:
             pid = squad_snapshot.get(slot)
             if not pid:
@@ -352,16 +373,45 @@ async def award_points(match: dict, bot=None):
             breakdown  = build_breakdown(pid, stats, is_captain)
             breakdown["match"] = f"{home_team} {home_score}-{away_score} {away_team}"
             final_pts  = breakdown.get("total", 0)
-
-            await sheets.save_player_points(uid, pid, mid, gw_id, final_pts, breakdown)
             user_total += final_pts
+            user_points_rows.append({
+                "telegram_id": uid,
+                "player_id":   pid,
+                "match_id":    mid,
+                "gameweek_id": gw_id,
+                "points":      final_pts,
+                "breakdown":   _json.dumps(breakdown),
+            })
 
-        # Compute total from ALL player_match_points for this user (source of truth)
-        all_pts_rows = sheets._get_sb().table("player_match_points").select(
-            "points").eq("telegram_id", uid).execute()
-        absolute_total = sum(int(r.get("points", 0)) for r in (all_pts_rows.data or []))
-        await sheets.update_user(uid, total_points=absolute_total)
+        # Batch upsert all player points in ONE DB call instead of 11
+        if user_points_rows:
+            try:
+                sheets._get_sb().table("player_match_points").upsert(
+                    user_points_rows,
+                    on_conflict="telegram_id,player_id,match_id"
+                ).execute()
+            except Exception as e:
+                logger.error("Batch upsert error for user %s: %s", uid, e)
+
+        # Store user total for batch update later
+        user_totals_batch[uid] = user_total
         updated += 1
+
+    # ── OPTIMIZATION: batch update total_points for all users in parallel ──────
+    # Fetch all player_match_points in one query, compute totals, batch update
+    if user_totals_batch:
+        all_pts_res = sheets._get_sb().table("player_match_points").select(
+            "telegram_id,points"
+        ).in_("telegram_id", [str(u) for u in user_totals_batch.keys()]).execute()
+        uid_totals: dict[int, int] = {}
+        for r in (all_pts_res.data or []):
+            u = int(r["telegram_id"])
+            uid_totals[u] = uid_totals.get(u, 0) + int(r.get("points") or 0)
+        # Update all users in parallel
+        await asyncio.gather(*[
+            sheets.update_user(u, total_points=uid_totals.get(u, 0))
+            for u in user_totals_batch.keys()
+        ])
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
     await sheets.mark_match_points_awarded(mid)
