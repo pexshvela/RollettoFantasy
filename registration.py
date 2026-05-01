@@ -49,6 +49,21 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(Registration.language)
 
 
+@router.message(Command("check"))
+async def cmd_check(message: Message, state: FSMContext):
+    uid  = message.from_user.id
+    user = await sheets.get_user(uid)
+    if user:
+        lang = user.get("language", "en")
+        await _show_home(message, user, lang)
+        return
+    # Not registered yet — ask for username again
+    data = await state.get_data()
+    lang = data.get("language", "en")
+    await message.answer(t(lang, "enter_username"))
+    await state.set_state(Registration.username)
+
+
 @router.callback_query(Registration.language, F.data.startswith("lang:"))
 async def pick_language(callback: CallbackQuery, state: FSMContext):
     lang = callback.data.split(":")[1]
@@ -66,6 +81,8 @@ async def enter_username(message: Message, state: FSMContext):
     data     = await state.get_data()
     lang     = data.get("language", "en")
     username = message.text.strip()
+    attempts = data.get("reg_attempts", 0) + 1
+    await state.update_data(reg_attempts=attempts)
 
     await message.answer(t(lang, "verifying"))
 
@@ -74,10 +91,30 @@ async def enter_username(message: Message, state: FSMContext):
         kb = InlineKeyboardBuilder()
         kb.button(text="🔄 Try Again", callback_data="reg:retry")
         kb.adjust(1)
-        await message.answer(
-            t(lang, "not_found", url=sheets.config.ROLLETTO_SIGNUP_URL),
-            reply_markup=kb.as_markup()
-        )
+        msg = t(lang, "not_found", url=sheets.config.ROLLETTO_SIGNUP_URL)
+        if attempts >= 3:
+            # Show pending message and notify admin
+            pending_msg = (
+                "⏳ <b>We still couldn't find your account.</b>\n\n"
+                "Our team has been notified and will grant you access manually within 24 hours.\n"
+                "Please be patient!"
+            )
+            await message.answer(pending_msg, parse_mode="HTML", reply_markup=kb.as_markup())
+            # Notify admin
+            try:
+                await message.bot.send_message(
+                    _config.ADMIN_ID,
+                    f"⚠️ <b>Pending registration</b>\n\n"
+                    f"User: @{message.from_user.username or message.from_user.id}\n"
+                    f"Telegram ID: <code>{message.from_user.id}</code>\n"
+                    f"Tried username: <code>{username}</code>\n"
+                    f"Attempts: {attempts}",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            return
+        await message.answer(msg, parse_mode="HTML", reply_markup=kb.as_markup())
         return
 
     # Check if this rolletto username is already taken by another Telegram ID
