@@ -17,6 +17,27 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# ── Simple in-memory cache for frequently read settings ───────────────────────
+import time as _time
+_cache: dict = {}
+_CACHE_TTL = 60  # seconds
+
+def _cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and _time.time() - entry["ts"] < _CACHE_TTL:
+        return entry["val"]
+    return None
+
+def _cache_set(key: str, val):
+    _cache[key] = {"val": val, "ts": _time.time()}
+
+def invalidate_cache(key: str = None):
+    """Call when a setting changes so next fetch is fresh."""
+    if key:
+        _cache.pop(key, None)
+    else:
+        _cache.clear()
+
 # ── Supabase ──────────────────────────────────────────────────────────────────
 
 _sb: Optional[Client] = None
@@ -273,20 +294,25 @@ async def count_transfers_this_gw(telegram_id: int, gameweek_id: int) -> int:
 # ── Gameweeks ─────────────────────────────────────────────────────────────────
 
 async def get_active_gameweek() -> Optional[dict]:
+    cached = _cache_get("active_gameweek")
+    if cached is not None:
+        return cached
     try:
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        # Get the earliest gameweek whose start_date is today or in the future
         res = _get_sb().table("gameweeks").select("*").gte(
             "start_date", today
         ).order("start_date").limit(1).execute()
         if res.data:
-            return res.data[0]
-        # Fallback: return the most recent past gameweek
+            result = res.data[0]
+            _cache_set("active_gameweek", result)
+            return result
         res2 = _get_sb().table("gameweeks").select("*").order(
             "start_date", desc=True
         ).limit(1).execute()
-        return res2.data[0] if res2.data else None
+        result = res2.data[0] if res2.data else None
+        _cache_set("active_gameweek", result)
+        return result
     except Exception as e:
         logger.error("get_active_gameweek error: %s", e)
         return None
@@ -574,19 +600,27 @@ async def get_gameweek_leaderboard(gameweek_id: int, limit: int = 20) -> list[di
 # ── Bot settings ──────────────────────────────────────────────────────────────
 
 async def get_setting(key: str, default=None):
+    cache_key = f"setting:{key}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     try:
         res = _get_sb().table("bot_settings").select("value").eq("key", key).execute()
         if res.data:
             try:
-                return json.loads(res.data[0]["value"])
+                val = json.loads(res.data[0]["value"])
             except Exception:
-                return res.data[0]["value"]
+                val = res.data[0]["value"]
+            _cache_set(cache_key, val)
+            return val
     except Exception:
         pass
     return default
 
 
 async def set_setting(key: str, value):
+    invalidate_cache(f"setting:{key}")  # Invalidate cache on write
+    invalidate_cache("active_gameweek")
     try:
         v = json.dumps(value) if not isinstance(value, str) else value
         _get_sb().table("bot_settings").upsert({"key": key, "value": v}).execute()
