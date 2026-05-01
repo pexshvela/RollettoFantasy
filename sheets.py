@@ -135,14 +135,15 @@ async def get_user(telegram_id: int) -> Optional[dict]:
         return None
 
 
-async def create_user(telegram_id: int, username: str, language: str) -> dict:
+async def create_user(telegram_id: int, username: str, language: str, tg_username: str = "") -> dict:
     data = {
-        "telegram_id":   telegram_id,
-        "username":      username,
-        "language":      language,
-        "total_points":  0,
-        "captain":       "",
-        "formation":     "",
+        "telegram_id":      telegram_id,
+        "rolletto_username": username,
+        "tg_username":       tg_username,
+        "language":          language,
+        "total_points":      0,
+        "captain":           "",
+        "formation":         "",
     }
     try:
         res = _get_sb().table("users").upsert(data).execute()
@@ -162,7 +163,7 @@ async def update_user(telegram_id: int, **kwargs):
 async def get_user_by_rolletto_username(username: str) -> dict | None:
     """Check if a rolletto username is already registered to any telegram_id."""
     try:
-        res = _get_sb().table("users").select("*").ilike("username", username.strip()).execute()
+        res = _get_sb().table("users").select("*").ilike("rolletto_username", username.strip()).execute()
         return res.data[0] if res.data else None
     except Exception:
         return None
@@ -550,9 +551,14 @@ async def get_gameweek_points(telegram_id: int, gameweek_id: int) -> int:
 async def get_overall_leaderboard(limit: int = 20) -> list[dict]:
     try:
         res = _get_sb().table("users").select(
-            "telegram_id,username,total_points"
+            "telegram_id,rolletto_username,tg_username,username,total_points"
         ).order("total_points", desc=True).limit(limit).execute()
-        return res.data or []
+        # Normalize username field for display
+        rows = []
+        for r in (res.data or []):
+            r["username"] = r.get("rolletto_username") or r.get("tg_username") or r.get("username") or "?"
+            rows.append(r)
+        return rows
     except Exception as e:
         logger.error("get_overall_leaderboard error: %s", e)
         return []
@@ -573,8 +579,11 @@ async def get_gameweek_leaderboard(gameweek_id: int, limit: int = 20) -> list[di
 
         # Fetch all users in one query to avoid N+1
         all_users_res = _get_sb().table("users").select(
-            "telegram_id,username,total_points"
+            "telegram_id,rolletto_username,tg_username,username,total_points"
         ).execute()
+        # Normalize username for display
+        for u in (all_users_res.data or []):
+            u["username"] = u.get("rolletto_username") or u.get("tg_username") or u.get("username") or "?"
         uid_to_user = {int(u["telegram_id"]): u for u in (all_users_res.data or [])}
 
         # Include ALL confirmed users — even those with 0 pts this GW
@@ -585,7 +594,7 @@ async def get_gameweek_leaderboard(gameweek_id: int, limit: int = 20) -> list[di
             pts = totals.get(uid, 0)
             result.append({
                 "telegram_id": uid,
-                "username": u.get("username", "?"),
+                "username": u.get("rolletto_username") or u.get("tg_username") or u.get("username") or "?",
                 "total_points": pts
             })
 
