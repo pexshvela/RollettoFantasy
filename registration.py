@@ -224,11 +224,10 @@ _last_home_msg: dict[int, int] = {}
 
 
 async def _home_text(user: dict, lang: str) -> str:
-    gw = await sheets.get_active_gameweek()
-    deadline = await sheets.get_confirmation_deadline()
+    rnd = await sheets.get_active_round()
     pts = user.get("total_points", 0)
     uid = user.get("telegram_id", 0)
-    # Check confirmation via confirmations table (not user.confirmed which is unreliable)
+    # Check confirmation via confirmations table
     confirmed = False
     try:
         conf = await sheets.get_latest_confirmation(int(uid))
@@ -238,8 +237,11 @@ async def _home_text(user: dict, lang: str) -> str:
         pass
 
     status_parts = []
-    if gw:
-        status_parts.append(f"📅 Gameweek: <b>{gw['name']}</b>")
+    if rnd:
+        status_parts.append(f"📅 Round: <b>{rnd['number']}</b>")
+    deadline = rnd.get("deadline") if rnd else None
+    if not deadline:
+        deadline = await sheets.get_confirmation_deadline()
     if deadline:
         status_parts.append(f"⏰ Deadline: <b>{deadline[:16]}</b>")
     if confirmed:
