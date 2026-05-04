@@ -691,6 +691,17 @@ async def is_transfer_window_open() -> bool:
 
 
 async def get_confirmation_deadline() -> Optional[str]:
+    """Get the effective deadline: round-specific first, then global fallback."""
+    # Try round-specific deadline first
+    try:
+        rnd = await get_active_round()
+        if rnd and rnd.get("number"):
+            round_dl = await get_round_deadline(rnd["number"])
+            if round_dl:
+                return round_dl
+    except Exception:
+        pass
+    # Fall back to global deadline
     return await get_setting("confirmation_deadline", None)
 
 
