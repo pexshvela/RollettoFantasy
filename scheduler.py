@@ -190,11 +190,17 @@ async def award_points(match: dict, bot=None):
         # Find matching bot player by name
         bot_player = find_player_by_name(api_name)
 
-        # Verify team side
-        if bot_player and side:
+        if bot_player:
             bp_side = _side_for_team(bot_player["team"])
-            if bp_side and bp_side != side:
-                bot_player = None
+            if side:
+                # API gave us a known team_id — verify sides match
+                if bp_side and bp_side != side:
+                    bot_player = None
+            else:
+                # API team_id unknown — verify bot player's team actually plays in this match
+                # If bp_side is empty the team doesn't play in this match → reject
+                if not bp_side:
+                    bot_player = None
 
         if not bot_player:
             continue
