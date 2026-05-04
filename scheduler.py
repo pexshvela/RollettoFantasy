@@ -301,6 +301,9 @@ async def award_points(match: dict, bot=None):
                     try: snap = _json.loads(snap)
                     except Exception: snap = {}
                 await sheets.confirm_squad(uid, gw_id, snap)
+                # Update in-memory so squad_snapshot below gets the parsed dict
+                confirmation = dict(confirmation)
+                confirmation["squad_snapshot"] = snap
         if not confirmation:
             continue  # Never confirmed → 0 points
 
