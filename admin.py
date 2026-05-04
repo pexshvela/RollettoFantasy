@@ -46,7 +46,7 @@ COMMANDS_TEXT = """📖 <b>ADMIN COMMANDS</b>
 <i>Fetch all fixtures from API, save to Supabase, auto-create gameweeks.
 Run this at start of campaign or before each matchday.</i>
 
-/gameweeks
+/rounds
 <i>List all gameweeks with dates, deadlines and status.</i>
 
 /setgwstatus ID active|upcoming|finished
@@ -289,34 +289,92 @@ async def cmd_fixtures(message: Message, state: FSMContext):
         await message.answer(text, parse_mode="HTML")
 
 
-@router.message(Command("gameweeks"))
-async def cmd_gameweeks(message: Message, state: FSMContext):
+@router.message(Command("rounds"))
+async def cmd_rounds(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    gws = await sheets.get_all_gameweeks()
-    gws = sorted(gws, key=lambda g: g.get("start_date", ""))
-    if not gws:
-        await message.answer("No gameweeks yet. Run /fixtures first.")
+    import football_api as _fapi
+    tournament = await sheets.get_tournament()
+    current_round_str = await _fapi.get_current_round(tournament)
+    current_num = _fapi.parse_round_number(current_round_str) if current_round_str else None
+    all_rounds = await _fapi.get_rounds(tournament)
+
+    if not all_rounds:
+        await message.answer("❌ Could not fetch rounds from API.")
         return
 
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    lines = ["📅 <b>Gameweeks:</b>\n"]
-    for gw in gws:
-        # Derive status from date rather than stored value
-        start = gw.get("start_date", "")
-        if start < today:
-            real_status = "finished"
-        elif start == today:
-            real_status = "active"
-        else:
-            real_status = "upcoming"
-        emoji = {"active":"🟢","upcoming":"⏳","finished":"✅"}.get(real_status,"❓")
-        lines.append(
-            f"{emoji} <b>GW {gw['id']}</b>: {gw['name']}\n"
-            f"   📅 {gw.get('start_date','')} | ⏰ Deadline: {str(gw.get('deadline',''))[:16]}\n"
-            f"   Status: {gw.get('status','')}"
-        )
+
+    lines = [f"📋 <b>Rounds ({tournament.upper()}):</b>\n"]
+    # Only show rounds within ±3 of current to keep message short
+    nums = [_fapi.parse_round_number(r) for r in all_rounds if _fapi.parse_round_number(r)]
+    if current_num:
+        show_nums = [n for n in nums if current_num - 3 <= n <= current_num + 3]
+    else:
+        show_nums = nums[-7:]  # last 7
+
+    for num in show_nums:
+        is_current = num == current_num
+        emoji = "🟢" if is_current else ("✅" if current_num and num < current_num else "⏳")
+        deadline = await sheets.get_round_deadline(num)
+        deadline_str = f" | ⏰ {deadline[:16]}" if deadline else ""
+        current_tag = " ← current" if is_current else ""
+        lines.append(f"{emoji} <b>Round {num}</b>{deadline_str}{current_tag}")
+
+    lines.append("<i>Use /setdeadline ROUND YYYY-MM-DD HH:MM to set a round deadline</i>")
+    lines.append("<i>Use /matchdays ROUND to see fixtures in a round</i>")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("matchdays"))
+async def cmd_matchdays(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Usage: /matchdays 35")
+        return
+    round_num = int(parts[1])
+    import football_api as _fapi
+    tournament = await sheets.get_tournament()
+    fixtures = await _fapi.get_round_fixtures(tournament, round_num)
+    if not fixtures:
+        await message.answer(f"❌ No fixtures found for Round {round_num}.")
+        return
+
+    FINAL = {"final", "ft", "match finished", "aet", "pen", "finished"}
+    lines = [f"📋 <b>Round {round_num} fixtures:</b>\n"]
+    # Group by date
+    by_date: dict[str, list] = {}
+    for f in fixtures:
+        d = (f.get("date") or f.get("match_date") or "")[:10]
+        by_date.setdefault(d, []).append(f)
+
+    for date in sorted(by_date):
+        lines.append(f"📅 <b>{date}</b>")
+        for f in by_date[date]:
+            home = f.get("home_team", "?")
+            away = f.get("away_team", "?")
+            hs = f.get("home_score")
+            aws = f.get("away_score")
+            status = str(f.get("status", "")).lower()
+            if hs is not None and aws is not None and status in FINAL:
+                score = f"{hs}–{aws}"
+                emoji = "✅"
+            elif status in {"1h", "2h", "ht", "live", "in play"}:
+                score = f"{hs}–{aws} 🔴"
+                emoji = "🔴"
+            else:
+                time = (f.get("date") or f.get("match_date") or "")
+                score = time[11:16] if len(time) > 15 else "TBD"
+                emoji = "⏳"
+            lines.append(f"  {emoji} {home} vs {away}  <b>{score}</b>")
+        lines.append("")
+
+    deadline = await sheets.get_round_deadline(round_num)
+    if deadline:
+        lines.append(f"⏰ Deadline: <b>{deadline[:16]}</b>")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
@@ -344,20 +402,36 @@ async def cmd_setdeadline(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     parts = message.text.strip().split()
-    if len(parts) < 3:
-        await message.answer("Usage: /setdeadline YYYY-MM-DD HH:MM (UTC)")
-        return
+    # Usage A: /setdeadline 35 2026-05-08 18:00  (per round)
+    # Usage B: /setdeadline 2026-05-08 18:00     (global fallback)
     try:
-        dt_str = f"{parts[1]}T{parts[2]}:00+00:00"
-        datetime.fromisoformat(dt_str)  # validate
-        await sheets.set_setting("confirmation_deadline", dt_str)
-        await message.answer(
-            f"✅ Confirmation deadline set:\n<b>{parts[1]} {parts[2]} UTC</b>\n\n"
-            f"Users must confirm squad before this time.",
-            parse_mode="HTML"
-        )
+        if len(parts) >= 4 and parts[1].isdigit():
+            # Per-round deadline
+            round_num = int(parts[1])
+            dt_str = f"{parts[2]}T{parts[3]}:00+00:00"
+            datetime.fromisoformat(dt_str)
+            await sheets.set_round_deadline(round_num, dt_str)
+            await message.answer(
+                f"✅ Deadline for <b>Round {round_num}</b> set:\n<b>{parts[2]} {parts[3]} UTC</b>",
+                parse_mode="HTML"
+            )
+        elif len(parts) >= 3:
+            # Global deadline (legacy fallback)
+            dt_str = f"{parts[1]}T{parts[2]}:00+00:00"
+            datetime.fromisoformat(dt_str)
+            await sheets.set_setting("confirmation_deadline", dt_str)
+            await message.answer(
+                f"✅ Global deadline set:\n<b>{parts[1]} {parts[2]} UTC</b>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "Usage:\n"
+                "  /setdeadline 35 2026-05-08 18:00  — set deadline for Round 35\n"
+                "  /setdeadline 2026-05-08 18:00      — set global deadline"
+            )
     except Exception as e:
-        await message.answer(f"❌ Invalid format: {e}\nUse: /setdeadline 2026-04-29 20:00")
+        await message.answer(f"❌ Invalid format: {e}")
 
 
 @router.message(Command("cleardeadline"))
