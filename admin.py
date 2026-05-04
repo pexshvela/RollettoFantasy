@@ -114,6 +114,10 @@ Format: open YYYY-MM-DD HH:MM close YYYY-MM-DD HH:MM free N</i>
 <i>Re-run points calculation for a gameweek.
 Use if stats were wrong the first time.</i>
 
+/recalculate_all
+<i>Re-run points calculation for ALL gameweeks with finished matches.
+Use after a major fix. Takes longer than a single gameweek recalculation.</i>
+
 /recheck MATCH_ID
 <i>Force re-fetch a match result from the API.
 Use if a match is stuck as "upcoming" or "scheduled" after it ended.
@@ -699,6 +703,97 @@ async def cmd_recalculate(message: Message, state: FSMContext):
             tournament = await sheets.get_tournament()
             kb = home_keyboard(lang, tournament)
             # Delete old home message if tracked
+            if uid in _last_home_msg:
+                try:
+                    await message.bot.delete_message(uid, _last_home_msg[uid])
+                except Exception:
+                    pass
+            sent = await message.bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
+            _last_home_msg[uid] = sent.message_id
+        except Exception as e:
+            logger.warning("Could not push home to %s: %s", uid, e)
+
+
+@router.message(Command("recalculate_all"))
+async def cmd_recalculate_all(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🔄 Starting full recalculation across all gameweeks. This may take a while...")
+
+    all_matches = await sheets.get_recent_matches(days=365)
+    FINAL_STATUSES = {"final", "ft", "match finished", "aet", "pen", "finished"}
+    finished_matches = [
+        m for m in all_matches
+        if str(m.get("status", "")).lower() in FINAL_STATUSES
+        or m.get("home_score") is not None
+    ]
+
+    if not finished_matches:
+        await message.answer("No finished matches found in the database.")
+        return
+
+    from scheduler import award_points
+    import football_api as _fapi
+
+    total_matches = len(finished_matches)
+    await message.answer(f"📋 Found {total_matches} finished matches. Resetting all points first...")
+
+    # Step 1: Reset total_points for all users to 0 — we will recompute from scratch
+    all_users = await sheets.get_all_users()
+    for u in all_users:
+        sheets._get_sb().table("users").update(
+            {"total_points": 0}
+        ).eq("telegram_id", u["telegram_id"]).execute()
+
+    # Step 2: Delete ALL player_match_points rows in one shot
+    sheets._get_sb().table("player_match_points").delete().neq("telegram_id", 0).execute()
+
+    # Step 3: Reset points_awarded flag on all finished matches
+    for m in finished_matches:
+        sheets._get_sb().table("match_cache").update(
+            {"points_awarded": False}
+        ).eq("match_id", m["match_id"]).execute()
+
+    await message.answer("♻️ Points reset. Now recalculating match by match...")
+
+    reprocessed = 0
+    failed = 0
+
+    # Step 4: Recalculate match by match — award_points only awards to users
+    # who have a confirmation on or before that match's gameweek (carry-forward).
+    # Users who joined after a match's gameweek will NOT receive points for it.
+    for m in finished_matches:
+        mid = m["match_id"]
+        full = await _fapi.fetch_full_match(str(mid))
+        if not full:
+            logger.warning("recalculate_all: could not fetch match %s", mid)
+            failed += 1
+            continue
+        full["points_awarded"] = False
+        await award_points(full, None)
+        reprocessed += 1
+
+    await message.answer(
+        f"✅ Recalculation complete.\n"
+        f"Matches processed: {reprocessed}/{total_matches}\n"
+        f"Failed to fetch from API: {failed}"
+    )
+
+    # Step 5: Push updated home screen to all users
+    users = await sheets.get_all_users()
+    for u in users:
+        uid = int(u["telegram_id"])
+        try:
+            from registration import _home_text, _last_home_msg
+            from inline import home_keyboard
+            fresh_user = await sheets.get_user(uid)
+            if not fresh_user:
+                continue
+            lang = fresh_user.get("language", "en")
+            text = await _home_text(fresh_user, lang)
+            tournament = await sheets.get_tournament()
+            kb = home_keyboard(lang, tournament)
             if uid in _last_home_msg:
                 try:
                     await message.bot.delete_message(uid, _last_home_msg[uid])
