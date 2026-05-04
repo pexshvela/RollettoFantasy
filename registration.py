@@ -205,25 +205,31 @@ async def _edit_home(message: Message, user: dict, lang: str):
     uid = int(user.get("telegram_id", 0))
     kb = home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
     if message is None:
-        # message is None — cannot send without a valid message object, skip silently
         return
-    try:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except Exception:
-        # edit failed (message too old, deleted, or from old deployment)
-        # send a fresh message instead
+    # Always delete old and send fresh — keeps home screen clean when tournament changes
+    if uid in _last_home_msg:
         try:
-            sent = await message.answer(text, parse_mode="HTML", reply_markup=kb)
-            _last_home_msg[uid] = sent.message_id
+            await message.bot.delete_message(uid, _last_home_msg[uid])
         except Exception:
             pass
+    try:
+        sent = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        _last_home_msg[uid] = sent.message_id
+    except Exception:
+        pass
 
 
 # Track last home message ID per user (in-memory)
 _last_home_msg: dict[int, int] = {}
 
 
+_TOURNAMENT_NAMES = {
+    "pl":  "Premier League",
+    "ucl": "UEFA Champions League",
+}
+
 async def _home_text(user: dict, lang: str) -> str:
+    tournament = await sheets.get_tournament()
     rnd = await sheets.get_active_round()
     pts = user.get("total_points", 0)
     uid = user.get("telegram_id", 0)
@@ -237,6 +243,8 @@ async def _home_text(user: dict, lang: str) -> str:
         pass
 
     status_parts = []
+    tournament_name = _TOURNAMENT_NAMES.get(tournament, tournament.upper())
+    status_parts.append(f"🏆 Tournament: <b>{tournament_name}</b>")
     if rnd:
         status_parts.append(f"📅 Round: <b>{rnd['number']}</b>")
     deadline = rnd.get("deadline") if rnd else None
@@ -248,7 +256,7 @@ async def _home_text(user: dict, lang: str) -> str:
         status_parts.append("✅ Squad confirmed")
     else:
         status_parts.append("⚠️ Squad not confirmed")
-    status_parts.append(f"🏆 Total points: <b>{pts}</b>")
+    status_parts.append(f"🎯 Total points: <b>{pts}</b>")
 
     status = "\n".join(status_parts)
     return t(lang, "home_title", status=status)
