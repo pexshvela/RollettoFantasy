@@ -270,10 +270,17 @@ async def award_points(match: dict, bot=None):
 
     # ── OPTIMIZATION: bulk-fetch all confirmations in 2 queries instead of 2×N ──
     # Fetch all GW-specific confirmations at once
+    def _parse_snap(r):
+        snap = r.get("squad_snapshot")
+        if isinstance(snap, str):
+            try: r["squad_snapshot"] = _json.loads(snap)
+            except Exception: r["squad_snapshot"] = {}
+        return r
+
     gw_confs_res = sheets._get_sb().table("confirmations").select("*").eq(
         "gameweek_id", gw_id
     ).execute()
-    gw_confs = {int(r["telegram_id"]): r for r in (gw_confs_res.data or [])}
+    gw_confs = {int(r["telegram_id"]): _parse_snap(r) for r in (gw_confs_res.data or [])}
 
     # Fetch latest confirmation per user (for carry-forward) in one query
     all_confs_res = sheets._get_sb().table("confirmations").select("*").order(
@@ -283,7 +290,7 @@ async def award_points(match: dict, bot=None):
     for r in (all_confs_res.data or []):
         uid_r = int(r["telegram_id"])
         if uid_r not in latest_confs:
-            latest_confs[uid_r] = r
+            latest_confs[uid_r] = _parse_snap(r)
 
     user_totals_batch: dict[int, int] = {}
 
