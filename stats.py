@@ -266,12 +266,12 @@ async def show_leaderboard(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    gw = await sheets.get_active_gameweek()
+    rnd = await sheets.get_active_round()
 
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "lb_btn_overall"), callback_data="lb:overall")
-    if gw:
-        kb.button(text=t(lang, "lb_btn_gw"), callback_data=f"lb:gw:{gw['id']}")
+    if rnd and rnd.get("number"):
+        kb.button(text=t(lang, "lb_btn_gw"), callback_data=f"lb:round:{rnd['number']}")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(2, 1)
 
@@ -315,18 +315,22 @@ async def show_overall_lb(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("lb:gw:"))
-async def show_gw_lb(callback: CallbackQuery, state: FSMContext):
-    gw_id = int(callback.data.split(":")[2])
-    uid   = callback.from_user.id
-    user  = await sheets.get_user(uid)
-    lang  = await get_lang(uid, user)
+@router.callback_query(F.data.startswith("lb:round:"))
+async def show_round_lb(callback: CallbackQuery, state: FSMContext):
+    round_num = int(callback.data.split(":")[2])
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+
+    # get_gameweek_leaderboard uses gameweek_id internally — find the gw
+    # whose name matches this round number, or use round_num directly as gw_id
+    gws = await sheets.get_all_gameweeks()
+    gw = next((g for g in gws if str(round_num) in str(g.get("name", ""))), None)
+    gw_id = gw["id"] if gw else round_num
 
     rows = await sheets.get_gameweek_leaderboard(gw_id, 20)
-    gw   = await sheets.get_gameweek(gw_id)
-    gw_name = gw["name"] if gw else str(gw_id)
 
-    lines = [t(lang, "lb_gameweek", n=gw_name), ""]
+    lines = [t(lang, "lb_gameweek", n=round_num), ""]
     my_in_list = False
     for i, r in enumerate(rows, 1):
         username = mask_username(r.get("username", "?"))
@@ -337,10 +341,10 @@ async def show_gw_lb(callback: CallbackQuery, state: FSMContext):
         me = " 👈" if is_me else ""
         lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
     if not my_in_list:
-        lines.append(f"\n— You: <b>0 pts</b> this gameweek")
+        lines.append(f"\n— You: <b>0 pts</b> this round")
 
     kb = InlineKeyboardBuilder()
-    kb.button(text="🏆 Overall",     callback_data="lb:overall")
+    kb.button(text="🏆 Overall", callback_data="lb:overall")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(2)
 
