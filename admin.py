@@ -868,25 +868,15 @@ async def cmd_recalculate_all(message: Message, state: FSMContext):
 
     # Step 5: Push updated home screen to all users
     users = await sheets.get_all_users()
+    from registration import _push_home
     for u in users:
         uid = int(u["telegram_id"])
         try:
-            from registration import _home_text, _last_home_msg
-            from inline import home_keyboard
             fresh_user = await sheets.get_user(uid)
             if not fresh_user:
                 continue
             lang = fresh_user.get("language", "en")
-            text = await _home_text(fresh_user, lang)
-            tournament = await sheets.get_tournament()
-            kb = home_keyboard(lang, tournament)
-            if uid in _last_home_msg:
-                try:
-                    await message.bot.delete_message(uid, _last_home_msg[uid])
-                except Exception:
-                    pass
-            sent = await message.bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
-            _last_home_msg[uid] = sent.message_id
+            await _push_home(message.bot, uid, fresh_user, lang)
         except Exception as e:
             logger.warning("Could not push home to %s: %s", uid, e)
 
