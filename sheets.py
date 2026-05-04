@@ -319,6 +319,39 @@ async def get_active_gameweek() -> Optional[dict]:
         return None
 
 
+async def get_active_round() -> dict | None:
+    """Return active round info: {number, name, start_date, end_date, deadline}.
+    Uses API for current round number, deadline from bot_settings round_deadline_N."""
+    try:
+        import football_api as _fapi
+        tournament = await get_tournament()
+        round_str = await _fapi.get_current_round(tournament)
+        if not round_str:
+            # Fallback: use active gameweek
+            gw = await get_active_gameweek()
+            if gw:
+                return {"number": gw.get("id"), "name": gw.get("name", ""), "deadline": gw.get("deadline")}
+            return None
+        num = _fapi.parse_round_number(round_str)
+        # Get deadline for this round from bot_settings
+        deadline = await get_round_deadline(num)
+        return {"number": num, "name": f"Round {num}", "round_str": round_str, "deadline": deadline}
+    except Exception as e:
+        logger.error("get_active_round error: %s", e)
+        return None
+
+
+async def get_round_deadline(round_num: int) -> Optional[str]:
+    """Get deadline for a specific round from bot_settings key 'round_deadline_N'."""
+    return await get_setting(f"round_deadline_{round_num}")
+
+
+async def set_round_deadline(round_num: int, deadline_iso: str):
+    """Set deadline for a specific round in bot_settings."""
+    await set_setting(f"round_deadline_{round_num}", deadline_iso)
+    _cache_invalidate("active_gameweek")
+
+
 async def get_gameweek(gw_id: int) -> Optional[dict]:
     try:
         res = _get_sb().table("gameweeks").select("*").eq("id", gw_id).execute()
