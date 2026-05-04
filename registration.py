@@ -201,19 +201,34 @@ async def _show_home(message: Message, user: dict, lang: str):
 
 
 async def _edit_home(message: Message, user: dict, lang: str):
+    """Edit the existing home message in place. Falls back to send if edit fails."""
     text = await _home_text(user, lang)
     uid = int(user.get("telegram_id", 0))
     kb = home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
     if message is None:
         return
-    # Always delete old and send fresh — keeps home screen clean when tournament changes
+    try:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        # edit failed (message too old, deleted, or from old deployment) — send fresh
+        try:
+            sent = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+            _last_home_msg[uid] = sent.message_id
+        except Exception:
+            pass
+
+
+async def _push_home(bot, uid: int, user: dict, lang: str):
+    """Delete old home message and send a fresh one. Used for broadcasts."""
+    text = await _home_text(user, lang)
+    kb = home_keyboard(lang, is_admin=uid == _config.ADMIN_ID)
     if uid in _last_home_msg:
         try:
-            await message.bot.delete_message(uid, _last_home_msg[uid])
+            await bot.delete_message(uid, _last_home_msg[uid])
         except Exception:
             pass
     try:
-        sent = await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        sent = await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
         _last_home_msg[uid] = sent.message_id
     except Exception:
         pass
