@@ -56,12 +56,18 @@ Run this at start of campaign or before each matchday.</i>
 ⏰ <b>DEADLINES</b>
 ━━━━━━━━━━━━━━━━━
 
-/setdeadline 2026-04-29 20:00
-<i>Set confirmation deadline. Format: YYYY-MM-DD HH:MM (UTC).
-Users must confirm squad before this time or score 0.</i>
+/setdeadline 35 2026-05-08 18:00
+<i>Set squad confirmation deadline for Round 35.
+Users must confirm before this time or score 0 for that round.</i>
+
+/setdeadline 2026-05-08 18:00
+<i>Set a global deadline (fallback if no round deadline set).</i>
+
+/cleardeadline 35
+<i>Remove deadline for Round 35.</i>
 
 /cleardeadline
-<i>Remove the current deadline (squads can confirm anytime).</i>
+<i>Remove the global deadline.</i>
 
 ━━━━━━━━━━━━━━━━━
 🔄 <b>TRANSFERS</b>
@@ -438,8 +444,14 @@ async def cmd_setdeadline(message: Message, state: FSMContext):
 async def cmd_cleardeadline(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    await sheets.set_setting("confirmation_deadline", None)
-    await message.answer("✅ Deadline cleared. Squads can confirm anytime.")
+    parts = message.text.strip().split()
+    if len(parts) >= 2 and parts[1].isdigit():
+        round_num = int(parts[1])
+        await sheets.set_round_deadline(round_num, None)
+        await message.answer(f"✅ Deadline for Round {round_num} cleared.")
+    else:
+        await sheets.set_setting("confirmation_deadline", None)
+        await message.answer("✅ Global deadline cleared. Squads can confirm anytime.")
 
 
 # ── Transfers ─────────────────────────────────────────────────────────────────
