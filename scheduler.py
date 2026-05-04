@@ -307,7 +307,6 @@ async def award_points(match: dict, bot=None):
         squad_snapshot = confirmation.get("squad_snapshot") or {}
         # Supabase sometimes returns squad_snapshot as a JSON string — parse it
         if isinstance(squad_snapshot, str):
-            import json as _json
             try:
                 squad_snapshot = _json.loads(squad_snapshot)
             except Exception:
@@ -514,9 +513,8 @@ async def check_transfer_window_notifications(bot=None):
     key_open = f"open:{ts.get('open','')}"
     open_time = ts.get("open", "")
     try:
-        from datetime import datetime, timezone as _tz
         open_dt = datetime.fromisoformat(open_time.replace("Z", "+00:00")) if open_time else None
-        now_dt  = datetime.now(_tz.utc)
+        now_dt  = datetime.now(timezone.utc)
         open_recent = open_dt and (now_dt - open_dt).total_seconds() < POLL_INTERVAL * 2
     except Exception:
         open_recent = False
@@ -539,7 +537,7 @@ async def check_transfer_window_notifications(bot=None):
     key_close = f"close:{ts.get('close','')}"
     close_time = ts.get("close", "")
     try:
-        close_dt   = datetime.fromisoformat(close_time.replace("Z", "+00:00")) if close_time else None
+        close_dt = datetime.fromisoformat(close_time.replace("Z", "+00:00")) if close_time else None
         close_recent = close_dt and (now_dt - close_dt).total_seconds() < POLL_INTERVAL * 2
     except Exception:
         close_recent = False
