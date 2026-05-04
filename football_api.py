@@ -255,3 +255,48 @@ async def fetch_full_match(fixture_id: str) -> dict | None:
     details["played_ids"]   = lineups.get("played_ids", set())
     details["starter_ids"]  = lineups.get("starter_ids", set())
     return details
+
+
+# ── 7. Rounds ─────────────────────────────────────────────────────────────────
+
+async def get_rounds(tournament: str) -> list[str]:
+    """Return list of round strings e.g. ['Regular Season - 1', ...]."""
+    cfg = LEAGUE_IDS.get(tournament, LEAGUE_IDS["ucl"])
+    code, data = await _get("/fixtures/rounds", {"league": cfg["league"], "season": cfg["season"]})
+    if code != 200 or not data:
+        return []
+    return data.get("response") or []
+
+
+async def get_current_round(tournament: str) -> str | None:
+    """Return current round string e.g. 'Regular Season - 35'."""
+    cfg = LEAGUE_IDS.get(tournament, LEAGUE_IDS["ucl"])
+    code, data = await _get("/fixtures/rounds", {
+        "league": cfg["league"], "season": cfg["season"], "current": "true"
+    })
+    if code != 200 or not data:
+        return None
+    rounds = data.get("response") or []
+    return rounds[0] if rounds else None
+
+
+async def get_round_fixtures(tournament: str, round_num: int) -> list[dict]:
+    """Return parsed fixtures for a specific round number."""
+    cfg = LEAGUE_IDS.get(tournament, LEAGUE_IDS["ucl"])
+    round_str = f"Regular Season - {round_num}"
+    code, data = await _get("/fixtures", {
+        "league": cfg["league"],
+        "season": cfg["season"],
+        "round": round_str,
+    })
+    if code != 200 or not data:
+        return []
+    return [_parse_fixture(f) for f in (data.get("response") or [])]
+
+
+def parse_round_number(round_str: str) -> int | None:
+    """Extract int from 'Regular Season - 35' -> 35."""
+    try:
+        return int(round_str.split("-")[-1].strip())
+    except Exception:
+        return None
