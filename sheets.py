@@ -349,7 +349,7 @@ async def get_round_deadline(round_num: int) -> Optional[str]:
 async def set_round_deadline(round_num: int, deadline_iso: str):
     """Set deadline for a specific round in bot_settings."""
     await set_setting(f"round_deadline_{round_num}", deadline_iso)
-    _cache_invalidate("active_gameweek")
+    _cache_set("active_gameweek", None)  # invalidate cache
 
 
 async def get_gameweek(gw_id: int) -> Optional[dict]:
