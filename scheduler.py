@@ -37,8 +37,36 @@ def _norm(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
 
 
+async def _sync_missing_matches():
+    """On startup: ensure current + next round matches are in match_cache."""
+    try:
+        tournament = await sheets.get_tournament()
+        current_str = await football_api.get_current_round(tournament)
+        current_num = football_api.parse_round_number(current_str) if current_str else None
+        if not current_num:
+            return
+        added = 0
+        for round_num in [current_num, current_num + 1]:
+            fixtures = await football_api.get_round_fixtures(tournament, round_num)
+            for m in fixtures:
+                mid = str(m.get("id") or m.get("match_id", ""))
+                if not mid:
+                    continue
+                existing = await sheets.get_cached_match(mid)
+                if not existing:
+                    await sheets.save_match_cache(m)
+                    added += 1
+        if added:
+            logger.info("Auto-synced %d missing matches for rounds %s/%s",
+                        added, current_num, current_num + 1)
+    except Exception as e:
+        logger.warning("_sync_missing_matches error: %s", e)
+
+
 async def run_scheduler(bot=None):
     logger.info("Scheduler started.")
+    # Sync missing matches on startup so no match is ever invisible to scheduler
+    await _sync_missing_matches()
     _first_run = True
     while True:
         try:
