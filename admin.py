@@ -559,9 +559,14 @@ async def cmd_users(message: Message, state: FSMContext):
     for u in sorted(users, key=lambda x: -(x.get("total_points") or 0)):
         conf   = "✅" if u.get("confirmed") else "⏳"
         pts    = u.get("total_points", 0)
+        display_name = (
+            u.get('rolletto_username') or
+            u.get('tg_username') or
+            u.get('username') or '?'
+        )
         lines.append(
             f"{conf} <code>{u['telegram_id']}</code> — "
-            f"<b>{u.get('username','?')}</b> — {pts} pts"
+            f"<b>{display_name}</b> — {pts} pts"
         )
 
     text = "\n".join(lines)
