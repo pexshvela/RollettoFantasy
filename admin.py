@@ -295,6 +295,44 @@ async def cmd_fixtures(message: Message, state: FSMContext):
         await message.answer(text, parse_mode="HTML")
 
 
+@router.message(Command("syncmatches"))
+async def cmd_syncmatches(message: Message, state: FSMContext):
+    """Add any missing matches from current + next round to match_cache without wiping."""
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("🔄 Syncing missing matches from API...")
+
+    import football_api as _fapi
+    tournament = await sheets.get_tournament()
+
+    current_str = await _fapi.get_current_round(tournament)
+    current_num = _fapi.parse_round_number(current_str) if current_str else None
+    if not current_num:
+        await message.answer("❌ Could not detect current round.")
+        return
+
+    added = 0
+    skipped = 0
+    for round_num in [current_num, current_num + 1]:
+        fixtures = await _fapi.get_round_fixtures(tournament, round_num)
+        for m in fixtures:
+            mid = str(m.get("id") or m.get("match_id", ""))
+            if not mid:
+                continue
+            existing = await sheets.get_cached_match(mid)
+            if existing:
+                skipped += 1
+                continue
+            await sheets.save_match_cache(m)
+            added += 1
+
+    await message.answer(
+        f"✅ Sync complete.\n"
+        f"Added: {added} new matches\n"
+        f"Already in cache: {skipped}"
+    )
+
+
 @router.message(Command("rounds"))
 async def cmd_rounds(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
