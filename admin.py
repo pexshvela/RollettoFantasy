@@ -360,16 +360,18 @@ async def cmd_syncmatches(message: Message, state: FSMContext):
     import football_api as _fapi
     tournament = await sheets.get_tournament()
 
+    all_rounds = await _fapi.get_rounds(tournament)
     current_str = await _fapi.get_current_round(tournament)
-    current_num = _fapi.parse_round_number(current_str) if current_str else None
-    if not current_num:
+    if not current_str or current_str not in all_rounds:
         await message.answer("❌ Could not detect current round.")
         return
+    current_idx = all_rounds.index(current_str)
+    rounds_to_sync = all_rounds[current_idx: current_idx + 2]  # current + next
 
     added = 0
     skipped = 0
-    for round_num in [current_num, current_num + 1]:
-        fixtures = await _fapi.get_round_fixtures(tournament, round_num)
+    for rnd_str in rounds_to_sync:
+        fixtures = await _fapi.get_round_fixtures_by_name(tournament, rnd_str)
         for m in fixtures:
             mid = str(m.get("id") or m.get("match_id", ""))
             if not mid:
@@ -406,23 +408,24 @@ async def cmd_rounds(message: Message, state: FSMContext):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     lines = [f"📋 <b>Rounds ({tournament.upper()}):</b>\n"]
-    # Only show rounds within ±3 of current to keep message short
-    nums = [_fapi.parse_round_number(r) for r in all_rounds if _fapi.parse_round_number(r)]
-    if current_num:
-        show_nums = [n for n in nums if current_num - 3 <= n <= current_num + 3]
-    else:
-        show_nums = nums[-7:]  # last 7
 
-    for num in show_nums:
-        is_current = num == current_num
-        emoji = "🟢" if is_current else ("✅" if current_num and num < current_num else "⏳")
-        deadline = await sheets.get_round_deadline(num)
+    # Show last 3 + current + next 3, or for knockout show all remaining
+    current_idx = all_rounds.index(current_round_str) if current_round_str in all_rounds else len(all_rounds) - 1
+    show_rounds = all_rounds[max(0, current_idx - 3): current_idx + 4]
+
+    for rnd_str in show_rounds:
+        is_current = rnd_str == current_round_str
+        emoji = "🟢" if is_current else ("✅" if all_rounds.index(rnd_str) < current_idx else "⏳")
+        display = _fapi.round_display_name(rnd_str)
+        deadline_key = _fapi.parse_round_number(rnd_str) or rnd_str.lower().replace(" ", "_").replace("-", "_")
+        deadline = await sheets.get_round_deadline(deadline_key)
         deadline_str = f" | ⏰ {deadline[:16]}" if deadline else ""
         current_tag = " ← current" if is_current else ""
-        lines.append(f"{emoji} <b>Round {num}</b>{deadline_str}{current_tag}")
+        lines.append(f"{emoji} <b>{display}</b>{deadline_str}{current_tag}")
 
-    lines.append("<i>Use /setdeadline ROUND YYYY-MM-DD HH:MM to set a round deadline</i>")
-    lines.append("<i>Use /matchdays ROUND to see fixtures in a round</i>")
+    lines.append("")
+    lines.append("<i>Use /setdeadline ROUND_NAME YYYY-MM-DD HH:MM</i>")
+    lines.append("<i>Use /matchdays ROUND_NAME to see fixtures</i>")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
@@ -431,19 +434,36 @@ async def cmd_matchdays(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     parts = message.text.strip().split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Usage: /matchdays 35")
+    if len(parts) < 2:
+        await message.answer("Usage: /matchdays 35  or  /matchdays semi-finals")
         return
-    round_num = int(parts[1])
     import football_api as _fapi
     tournament = await sheets.get_tournament()
-    fixtures = await _fapi.get_round_fixtures(tournament, round_num)
+    # Accept number (35) or name (semi-finals, quarter-finals, final)
+    round_arg = " ".join(parts[1:]).strip()
+    if round_arg.isdigit():
+        round_num = int(round_arg)
+        fixtures = await _fapi.get_round_fixtures(tournament, round_num)
+        round_display = f"Round {round_num}"
+    else:
+        # Named round — find matching round from API
+        all_rounds = await _fapi.get_rounds(tournament)
+        matched = next((r for r in all_rounds if r.lower().replace("-","").replace(" ","") == round_arg.lower().replace("-","").replace(" ","")), None)
+        if not matched:
+            # Try partial match
+            matched = next((r for r in all_rounds if round_arg.lower() in r.lower()), None)
+        if not matched:
+            await message.answer(f"❌ Round '{round_arg}' not found.\nAvailable: {', '.join(all_rounds[-6:])}")
+            return
+        fixtures = await _fapi.get_round_fixtures_by_name(tournament, matched)
+        round_display = _fapi.round_display_name(matched)
+        round_num = matched  # use string as key
     if not fixtures:
         await message.answer(f"❌ No fixtures found for Round {round_num}.")
         return
 
     FINAL = {"final", "ft", "match finished", "aet", "pen", "finished"}
-    lines = [f"📋 <b>Round {round_num} fixtures:</b>\n"]
+    lines = [f"📋 <b>{round_display} fixtures:</b>\n"]
     # Group by date
     by_date: dict[str, list] = {}
     for f in fixtures:
@@ -471,7 +491,8 @@ async def cmd_matchdays(message: Message, state: FSMContext):
             lines.append(f"  {emoji} {home} vs {away}  <b>{score}</b>")
         lines.append("")
 
-    deadline = await sheets.get_round_deadline(round_num)
+    deadline_key = _fapi.parse_round_number(str(round_num)) if str(round_num).isdigit() else str(round_num).lower().replace(" ","_").replace("-","_")
+    deadline = await sheets.get_round_deadline(deadline_key)
     if deadline:
         lines.append(f"⏰ Deadline: <b>{deadline[:16]}</b>")
     await message.answer("\n".join(lines), parse_mode="HTML")
@@ -504,14 +525,20 @@ async def cmd_setdeadline(message: Message, state: FSMContext):
     # Usage A: /setdeadline 35 2026-05-08 18:00  (per round)
     # Usage B: /setdeadline 2026-05-08 18:00     (global fallback)
     try:
-        if len(parts) >= 4 and parts[1].isdigit():
-            # Per-round deadline
-            round_num = int(parts[1])
+        if len(parts) >= 4:
+            # Per-round deadline: /setdeadline 35 DATE TIME or /setdeadline semi-finals DATE TIME
+            round_arg = parts[1]
             dt_str = f"{parts[2]}T{parts[3]}:00+00:00"
             datetime.fromisoformat(dt_str)
-            await sheets.set_round_deadline(round_num, dt_str)
+            if round_arg.isdigit():
+                round_key = int(round_arg)
+                round_label = f"Round {round_key}"
+            else:
+                round_key = round_arg.lower().replace(" ", "_").replace("-", "_")
+                round_label = round_arg.title()
+            await sheets.set_round_deadline(round_key, dt_str)
             await message.answer(
-                f"✅ Deadline for <b>Round {round_num}</b> set:\n<b>{parts[2]} {parts[3]} UTC</b>",
+                f"✅ Deadline for <b>{round_label}</b> set:\n<b>{parts[2]} {parts[3]} UTC</b>",
                 parse_mode="HTML"
             )
         elif len(parts) >= 3:
@@ -538,10 +565,16 @@ async def cmd_cleardeadline(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     parts = message.text.strip().split()
-    if len(parts) >= 2 and parts[1].isdigit():
-        round_num = int(parts[1])
-        await sheets.set_round_deadline(round_num, None)
-        await message.answer(f"✅ Deadline for Round {round_num} cleared.")
+    if len(parts) >= 2:
+        round_arg = parts[1]
+        if round_arg.isdigit():
+            round_key = int(round_arg)
+            round_label = f"Round {round_key}"
+        else:
+            round_key = round_arg.lower().replace(" ", "_").replace("-", "_")
+            round_label = round_arg.title()
+        await sheets.set_round_deadline(round_key, None)
+        await message.answer(f"✅ Deadline for {round_label} cleared.")
     else:
         await sheets.set_setting("confirmation_deadline", None)
         await message.answer("✅ Global deadline cleared. Squads can confirm anytime.")
