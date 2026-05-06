@@ -206,9 +206,64 @@ async def cmd_settournament(message: Message, state: FSMContext):
         await message.answer("Usage: /settournament ucl | pl")
         return
     t_name = parts[1]
+
+    NAMES = {"pl": "Premier League", "ucl": "UEFA Champions League"}
+    await message.answer(
+        f"🔄 Switching to <b>{NAMES.get(t_name, t_name.upper())}</b>...\n"
+        f"Resetting all squads and points.",
+        parse_mode="HTML"
+    )
+
+    # 1. Save new tournament
     await sheets.set_setting("active_tournament", t_name)
     pl_module.set_active_tournament(t_name)
-    await message.answer(f"✅ Tournament set to <b>{t_name.upper()}</b>", parse_mode="HTML")
+
+    # 2. Sync missing matches for the new tournament's current round
+    try:
+        import football_api as _fapi
+        current_str = await _fapi.get_current_round(t_name)
+        current_num = _fapi.parse_round_number(current_str) if current_str else None
+        if current_num:
+            added = 0
+            for round_num in [current_num, current_num + 1]:
+                fixtures = await _fapi.get_round_fixtures(t_name, round_num)
+                for m in fixtures:
+                    mid = str(m.get("id") or m.get("match_id", ""))
+                    if not mid:
+                        continue
+                    existing = await sheets.get_cached_match(mid)
+                    if not existing:
+                        await sheets.save_match_cache(m)
+                        added += 1
+            if added:
+                await message.answer(f"📋 Synced {added} matches for new tournament.")
+    except Exception as e:
+        logger.warning("settournament sync error: %s", e)
+
+    # 3. Reset all user squads, confirmations, points
+    await sheets.reset_for_tournament_change()
+
+    # 4. Push updated home screen to all users (delete old + send fresh)
+    users = await sheets.get_all_users()
+    from registration import _push_home
+    pushed = 0
+    for u in users:
+        uid = int(u["telegram_id"])
+        try:
+            fresh_user = await sheets.get_user(uid)
+            if not fresh_user:
+                continue
+            lang = fresh_user.get("language", "en")
+            await _push_home(message.bot, uid, fresh_user, lang)
+            pushed += 1
+        except Exception as e:
+            logger.warning("settournament push home %s: %s", uid, e)
+
+    await message.answer(
+        f"✅ Tournament switched to <b>{NAMES.get(t_name, t_name.upper())}</b>\n"
+        f"All squads reset. {pushed} users notified.",
+        parse_mode="HTML"
+    )
 
 
 # ── Fixtures & Gameweeks ──────────────────────────────────────────────────────
