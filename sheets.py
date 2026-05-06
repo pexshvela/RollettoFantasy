@@ -731,6 +731,24 @@ async def reset_user(telegram_id: int):
         logger.error("reset_user error: %s", e)
 
 
+async def reset_for_tournament_change():
+    """Reset all squads, confirmations, transfers and points for a tournament switch.
+    Keeps match_cache and gameweeks intact."""
+    try:
+        sb = _get_sb()
+        sb.table("squads").delete().neq("telegram_id", 0).execute()
+        sb.table("confirmations").delete().neq("telegram_id", 0).execute()
+        sb.table("transfers").delete().neq("telegram_id", 0).execute()
+        sb.table("player_match_points").delete().neq("telegram_id", 0).execute()
+        sb.table("users").update({
+            "total_points": 0,
+            "captain": "",
+            "formation": "",
+        }).neq("telegram_id", 0).execute()
+    except Exception as e:
+        logger.error("reset_for_tournament_change error: %s", e)
+
+
 async def reset_all():
     """Full campaign reset."""
     try:
