@@ -281,7 +281,7 @@ async def get_current_round(tournament: str) -> str | None:
 
 
 async def get_round_fixtures(tournament: str, round_num: int) -> list[dict]:
-    """Return parsed fixtures for a specific round number."""
+    """Return parsed fixtures for a specific numbered round."""
     cfg = LEAGUE_IDS.get(tournament, LEAGUE_IDS["ucl"])
     round_str = f"Regular Season - {round_num}"
     code, data = await _get("/fixtures", {
@@ -294,9 +294,36 @@ async def get_round_fixtures(tournament: str, round_num: int) -> list[dict]:
     return [_parse_fixture(f) for f in (data.get("response") or [])]
 
 
+async def get_round_fixtures_by_name(tournament: str, round_str: str) -> list[dict]:
+    """Return parsed fixtures for a named round e.g. 'Semi-finals', 'Final'."""
+    cfg = LEAGUE_IDS.get(tournament, LEAGUE_IDS["ucl"])
+    code, data = await _get("/fixtures", {
+        "league": cfg["league"],
+        "season": cfg["season"],
+        "round": round_str,
+    })
+    if code != 200 or not data:
+        return []
+    return [_parse_fixture(f) for f in (data.get("response") or [])]
+
+
 def parse_round_number(round_str: str) -> int | None:
-    """Extract int from 'Regular Season - 35' -> 35."""
+    """Extract int from 'Regular Season - 35' -> 35.
+    Returns None for named knockout rounds like 'Semi-finals'."""
     try:
         return int(round_str.split("-")[-1].strip())
     except Exception:
         return None
+
+
+def round_display_name(round_str: str) -> str:
+    """Return a clean display name for any round string.
+    'Regular Season - 35' -> 'Round 35'
+    'Semi-finals' -> 'Semi-finals'
+    'Quarter-finals' -> 'Quarter-finals'
+    """
+    num = parse_round_number(round_str)
+    if num is not None:
+        return f"Round {num}"
+    # Knockout round — use as-is, just clean up
+    return round_str.replace("-", " ").title().replace("  ", " ").strip()
