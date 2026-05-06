@@ -41,13 +41,15 @@ async def _sync_missing_matches():
     """On startup: ensure current + next round matches are in match_cache."""
     try:
         tournament = await sheets.get_tournament()
+        all_rounds = await football_api.get_rounds(tournament)
         current_str = await football_api.get_current_round(tournament)
-        current_num = football_api.parse_round_number(current_str) if current_str else None
-        if not current_num:
+        if not current_str or current_str not in all_rounds:
             return
+        current_idx = all_rounds.index(current_str)
+        rounds_to_sync = all_rounds[current_idx: current_idx + 2]  # current + next
         added = 0
-        for round_num in [current_num, current_num + 1]:
-            fixtures = await football_api.get_round_fixtures(tournament, round_num)
+        for rnd_str in rounds_to_sync:
+            fixtures = await football_api.get_round_fixtures_by_name(tournament, rnd_str)
             for m in fixtures:
                 mid = str(m.get("id") or m.get("match_id", ""))
                 if not mid:
@@ -57,8 +59,7 @@ async def _sync_missing_matches():
                     await sheets.save_match_cache(m)
                     added += 1
         if added:
-            logger.info("Auto-synced %d missing matches for rounds %s/%s",
-                        added, current_num, current_num + 1)
+            logger.info("Auto-synced %d missing matches for %s", added, rounds_to_sync)
     except Exception as e:
         logger.warning("_sync_missing_matches error: %s", e)
 
