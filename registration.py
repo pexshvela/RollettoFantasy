@@ -261,7 +261,8 @@ async def _home_text(user: dict, lang: str) -> str:
     tournament_name = _TOURNAMENT_NAMES.get(tournament, tournament.upper())
     status_parts.append(f"🏆 Tournament: <b>{tournament_name}</b>")
     if rnd:
-        status_parts.append(f"📅 Round: <b>{rnd['number']}</b>")
+        round_label = rnd.get("name") or (f"Round {rnd['number']}" if rnd.get("number") else "—")
+        status_parts.append(f"📅 Round: <b>{round_label}</b>")
     deadline = rnd.get("deadline") if rnd else None
     if not deadline:
         deadline = await sheets.get_confirmation_deadline()
