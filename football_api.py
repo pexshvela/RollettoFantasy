@@ -69,7 +69,8 @@ def _parse_fixture(f: dict) -> dict:
 
     ts = fixture.get("timestamp") or 0
     if ts:
-        dt       = datetime.fromtimestamp(int(ts))
+        # Always use UTC so match dates don't drift based on server timezone
+        dt       = datetime.fromtimestamp(int(ts), tz=timezone.utc)
         date_str = dt.strftime("%Y-%m-%d")
         time_str = dt.strftime("%H:%M")
     else:
