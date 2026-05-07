@@ -19,12 +19,13 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Ensure player lookup uses correct tournament
-def _ensure_tournament():
+# Ensure player lookup uses correct tournament (reads from DB, not hardcoded config)
+async def _ensure_tournament():
     try:
-        _set_tournament(config.DEFAULT_TOURNAMENT.lower())
+        tournament = await sheets.get_tournament()
+        _set_tournament(tournament.lower())
     except Exception:
-        pass
+        _set_tournament(config.DEFAULT_TOURNAMENT.lower())
 
 POLL_INTERVAL    = config.SCHEDULER_POLL_MINUTES * 60
 MATCH_DUE_MIN    = config.MATCH_DUE_MINUTES * 60
@@ -125,7 +126,7 @@ async def process_match(match_id: str, cached: dict, bot=None):
     """Fetch match result and award points if finished."""
     await sheets.update_match_last_checked(match_id)
 
-    _ensure_tournament()
+    await _ensure_tournament()
     details = await football_api.get_match_details(match_id)
     if not details:
         logger.warning("Could not fetch match %s", match_id)
@@ -156,6 +157,7 @@ async def process_match(match_id: str, cached: dict, bot=None):
 
 async def award_points(match: dict, bot=None):
     """Award points to all users with confirmed squads."""
+    await _ensure_tournament()
     mid        = match.get("id") or match.get("match_id", "")
     home_team  = match["home_team"]
     away_team  = match["away_team"]
@@ -295,8 +297,9 @@ async def award_points(match: dict, bot=None):
         gw_id = all_gws[0]["id"]
 
     if not gw_id:
-        logger.warning("No gameweek found for match on %s — cannot award points", match_date)
-        return
+        # Use first available gameweek rather than silently skipping — points still get stored
+        gw_id = all_gws[0]["id"] if all_gws else 1
+        logger.warning("No gameweek found for match on %s — using gw_id=%s as fallback", match_date, gw_id)
 
     # Award points to all confirmed squads
     import json as _json
