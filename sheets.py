@@ -517,6 +517,15 @@ async def get_recent_matches(days: int = 3, tournament: str = None) -> list[dict
         q = _get_sb().table("match_cache").select("*").gte("match_date", cutoff).order("match_date", desc=True)
         res = q.execute()
         rows = res.data or []
+        # Filter by tournament if specified
+        if tournament:
+            TOURNAMENT_NAMES = {
+                "pl":  ["premier league"],
+                "ucl": ["uefa champions league", "champions league"],
+            }
+            keywords = TOURNAMENT_NAMES.get(tournament.lower(), [tournament.lower()])
+            rows = [r for r in rows
+                    if any(k in str(r.get("tournament", "")).lower() for k in keywords)]
         for r in rows:
             for f in ("events", "player_stats"):
                 if isinstance(r.get(f), str):
@@ -702,16 +711,17 @@ async def is_transfer_window_open() -> bool:
 
 async def get_confirmation_deadline() -> Optional[str]:
     """Get the effective deadline: round-specific first, then global fallback."""
-    # Try round-specific deadline first
     try:
         rnd = await get_active_round()
-        if rnd and rnd.get("number"):
-            round_dl = await get_round_deadline(rnd["number"])
-            if round_dl:
-                return round_dl
+        if rnd:
+            # Use deadline_key which works for both numbered (35) and named (semi_finals) rounds
+            key = rnd.get("deadline_key") or rnd.get("number")
+            if key is not None:
+                round_dl = await get_round_deadline(key)
+                if round_dl:
+                    return round_dl
     except Exception:
         pass
-    # Fall back to global deadline
     return await get_setting("confirmation_deadline", None)
 
 
