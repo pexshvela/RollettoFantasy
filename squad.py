@@ -576,8 +576,12 @@ async def confirm_squad(callback: CallbackQuery, state: FSMContext):
         return
 
     gw = await sheets.get_active_gameweek()
+    # Fallback: if no active gameweek, use any existing one (gw_id is just a grouping key)
     if not gw:
-        await callback.answer("No active gameweek. Admin needs to run /fixtures first.", show_alert=True)
+        all_gws = await sheets.get_all_gameweeks()
+        gw = all_gws[0] if all_gws else None
+    if not gw:
+        await callback.answer("System not ready — admin needs to run /fixtures first.", show_alert=True)
         return
 
     await sheets.save_squad(uid, dict(squad, formation=formation))
