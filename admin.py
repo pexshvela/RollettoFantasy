@@ -902,31 +902,17 @@ async def cmd_recalculate(message: Message, state: FSMContext):
         reprocessed += 1
 
     await message.answer(f"✅ Recalculated {reprocessed} matches for gameweek {gw_id}.")
-    # Broadcast updated points to all confirmed users
+    # Push fresh home screen to all users
+    from registration import _push_home
     users = await sheets.get_all_users()
     for u in users:
         uid = int(u["telegram_id"])
         try:
-            from registration import _home_text, home_keyboard
-            from inline import home_keyboard as hk
-            import config as _cfg
             fresh_user = await sheets.get_user(uid)
             if not fresh_user:
                 continue
             lang = fresh_user.get("language", "en")
-            text = await _home_text(fresh_user, lang)
-            from inline import home_keyboard
-            from registration import _last_home_msg
-            tournament = await sheets.get_tournament()
-            kb = home_keyboard(lang, tournament)
-            # Delete old home message if tracked
-            if uid in _last_home_msg:
-                try:
-                    await message.bot.delete_message(uid, _last_home_msg[uid])
-                except Exception:
-                    pass
-            sent = await message.bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
-            _last_home_msg[uid] = sent.message_id
+            await _push_home(message.bot, uid, fresh_user, lang)
         except Exception as e:
             logger.warning("Could not push home to %s: %s", uid, e)
 
@@ -936,9 +922,10 @@ async def cmd_recalculate_all(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    await message.answer("🔄 Starting full recalculation across all gameweeks. This may take a while...")
+    tournament = await sheets.get_tournament()
+    await message.answer(f"🔄 Recalculating all {tournament.upper()} matches. This may take a while...")
 
-    all_matches = await sheets.get_recent_matches(days=365)
+    all_matches = await sheets.get_recent_matches(days=365, tournament=tournament)
     FINAL_STATUSES = {"final", "ft", "match finished", "aet", "pen", "finished"}
     finished_matches = [
         m for m in all_matches
