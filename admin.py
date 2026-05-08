@@ -517,6 +517,74 @@ async def cmd_setgwstatus(message: Message, state: FSMContext):
 
 # ── Deadlines ─────────────────────────────────────────────────────────────────
 
+@router.message(Command("autodeadline"))
+async def cmd_autodeadline(message: Message, state: FSMContext):
+    """Auto-set the round deadline to 1 hour before the first kickoff."""
+    if not is_admin(message.from_user.id):
+        return
+    import football_api as _fapi
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    parts = message.text.strip().split()
+    tournament = await sheets.get_tournament()
+
+    # Determine round
+    if len(parts) >= 2:
+        round_arg = " ".join(parts[1:]).strip()
+    else:
+        current_str = await _fapi.get_current_round(tournament)
+        if not current_str:
+            await message.answer("❌ Could not detect current round.")
+            return
+        round_arg = str(_fapi.parse_round_number(current_str)) if _fapi.parse_round_number(current_str) else current_str
+
+    # Resolve to API round string + fixtures
+    if round_arg.isdigit():
+        round_num = int(round_arg)
+        fixtures = await _fapi.get_round_fixtures(tournament, round_num)
+        round_key = round_num
+        round_label = f"Round {round_num}"
+    else:
+        all_rounds = await _fapi.get_rounds(tournament)
+        matched = next((r for r in all_rounds if r.lower().replace("-","").replace(" ","") == round_arg.lower().replace("-","").replace(" ","")), None)
+        if not matched:
+            matched = next((r for r in all_rounds if round_arg.lower() in r.lower()), None)
+        if not matched:
+            await message.answer(f"❌ Round '{round_arg}' not found.")
+            return
+        fixtures = await _fapi.get_round_fixtures_by_name(tournament, matched)
+        round_key = matched.lower().replace(" ", "_").replace("-", "_")
+        round_label = _fapi.round_display_name(matched)
+
+    if not fixtures:
+        await message.answer(f"❌ No fixtures found for {round_label}.")
+        return
+
+    # Find earliest kickoff
+    earliest_ts = None
+    for f in fixtures:
+        ts = f.get("kickoff_timestamp") or 0
+        if ts and (earliest_ts is None or ts < earliest_ts):
+            earliest_ts = ts
+
+    if not earliest_ts:
+        await message.answer("❌ Could not determine kickoff times from API.")
+        return
+
+    deadline_dt = _dt.fromtimestamp(earliest_ts, tz=_tz.utc) - _td(hours=1)
+    deadline_iso = deadline_dt.isoformat()
+
+    await sheets.set_round_deadline(round_key, deadline_iso)
+
+    await message.answer(
+        f"✅ Auto-deadline set for <b>{round_label}</b>\n"
+        f"⏰ <b>{deadline_dt.strftime('%Y-%m-%d %H:%M')} UTC</b>\n"
+        f"(1 hour before first kickoff)\n\n"
+        f"<i>Note: After deadline, sub swaps still allowed per-player until each player's match kicks off.</i>",
+        parse_mode="HTML"
+    )
+
+
 @router.message(Command("setdeadline"))
 async def cmd_setdeadline(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
