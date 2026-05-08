@@ -662,10 +662,7 @@ async def swap_subs_start(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    if not await sheets.is_before_deadline():
-        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
-        return
-
+    # No global deadline check for sub swaps — per-player locking is checked at execution
     squad     = await sheets.get_squad(uid)
     formation = (user or {}).get("formation", "4-3-3")
 
@@ -700,10 +697,7 @@ async def swap_pick_target(callback: CallbackQuery, state: FSMContext):
     lang      = await get_lang(uid, user)
     sub_slot  = callback.data.split(":", 2)[2]
 
-    if not await sheets.is_before_deadline():
-        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
-        return
-
+    # No global deadline check — per-player locking at execution time
     squad     = await sheets.get_squad(uid)
     formation = (user or {}).get("formation", "4-3-3")
 
@@ -753,10 +747,7 @@ async def swap_confirm(callback: CallbackQuery, state: FSMContext):
     sub_slot     = parts[2]
     starter_slot = parts[3]
 
-    if not await sheets.is_before_deadline():
-        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
-        return
-
+    # Per-player lock checked at swap_do execution
     squad = await sheets.get_squad(uid)
     if not squad:
         await callback.answer("Squad not found.", show_alert=True)
@@ -790,10 +781,7 @@ async def swap_do(callback: CallbackQuery, state: FSMContext):
     sub_slot     = parts[2]
     starter_slot = parts[3]
 
-    if not await sheets.is_before_deadline():
-        await callback.answer(t(lang, "swap_deadline_passed"), show_alert=True)
-        return
-
+    # Per-player lock checked below — no global deadline for sub swaps
     squad = await sheets.get_squad(uid)
     if not squad:
         await callback.answer("Squad not found.", show_alert=True)
@@ -810,6 +798,14 @@ async def swap_do(callback: CallbackQuery, state: FSMContext):
     starter_p   = get_player(starter_pid)
     sub_name     = sub_p["name"] if sub_p else sub_slot
     starter_name = starter_p["name"] if starter_p else starter_slot
+
+    # Per-player lock check: both players must not have their match started
+    if await sheets.is_player_locked(sub_pid):
+        await callback.answer(f"⛔ {sub_name}'s match has started — too late to swap them in.", show_alert=True)
+        return
+    if await sheets.is_player_locked(starter_pid):
+        await callback.answer(f"⛔ {starter_name}'s match has started — too late to swap them out.", show_alert=True)
+        return
 
     # Do the swap
     squad[sub_slot]     = starter_pid
