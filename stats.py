@@ -86,7 +86,7 @@ async def show_player_stats(callback: CallbackQuery, state: FSMContext):
     else:
         for r in history:
             bd = r.get("breakdown") or {}
-            match_label = bd.get("match", f"Match {r.get('match_id','?')[:8]}")
+            match_label = bd.get("match", f"Match {str(r.get('match_id','?'))[:8]}")
             pts = r.get("points", 0)
             lines.append(f"\n📅 <b>{match_label}</b>")
 
@@ -134,7 +134,8 @@ async def show_results(callback: CallbackQuery, state: FSMContext):
     from datetime import date as _date
     today_str = _date.today().isoformat()
 
-    all_matches = await sheets.get_recent_matches(days=30)
+    tournament = await sheets.get_tournament()
+    all_matches = await sheets.get_recent_matches(days=30, tournament=tournament)
 
     # Finished = has a real score AND match date is today or past
     finished = [m for m in all_matches
@@ -270,8 +271,10 @@ async def show_leaderboard(callback: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "lb_btn_overall"), callback_data="lb:overall")
-    if rnd and rnd.get("number"):
-        kb.button(text=t(lang, "lb_btn_gw"), callback_data=f"lb:round:{rnd['number']}")
+    if rnd:
+        # Use a stable callback key: number for PL, slug for UCL knockouts
+        cb_key = rnd.get("deadline_key") or rnd.get("number") or "current"
+        kb.button(text=t(lang, "lb_btn_gw"), callback_data=f"lb:round:{cb_key}")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(2, 1)
 
@@ -317,20 +320,27 @@ async def show_overall_lb(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("lb:round:"))
 async def show_round_lb(callback: CallbackQuery, state: FSMContext):
-    round_num = int(callback.data.split(":")[2])
+    round_key = callback.data.split(":", 2)[2]
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    # get_gameweek_leaderboard uses gameweek_id internally — find the gw
-    # whose name matches this round number, or use round_num directly as gw_id
+    # Get the round display name & associated gameweek_id
+    rnd = await sheets.get_active_round()
+    display = rnd.get("name") if rnd else round_key
+
+    # Map to internal gameweek_id (just a grouping key in DB)
     gws = await sheets.get_all_gameweeks()
-    gw = next((g for g in gws if str(round_num) in str(g.get("name", ""))), None)
-    gw_id = gw["id"] if gw else round_num
+    if round_key.isdigit():
+        gw = next((g for g in gws if str(round_key) in str(g.get("name", ""))), None)
+        gw_id = gw["id"] if gw else int(round_key)
+    else:
+        # Named round - use most recent gameweek as proxy
+        gw_id = gws[-1]["id"] if gws else 1
 
     rows = await sheets.get_gameweek_leaderboard(gw_id, 20)
 
-    lines = [t(lang, "lb_gameweek", n=round_num), ""]
+    lines = [t(lang, "lb_gameweek", n=display), ""]
     my_in_list = False
     for i, r in enumerate(rows, 1):
         username = mask_username(r.get("username", "?"))
