@@ -91,7 +91,7 @@ async def enter_username(message: Message, state: FSMContext):
         kb = InlineKeyboardBuilder()
         kb.button(text="🔄 Try Again", callback_data="reg:retry")
         kb.adjust(1)
-        msg = t(lang, "not_found", url=sheets.config.ROLLETTO_SIGNUP_URL)
+        msg = t(lang, "not_found", url=_config.ROLLETTO_SIGNUP_URL)
         if attempts >= 3:
             # Show pending message and notify admin
             pending_msg = (
