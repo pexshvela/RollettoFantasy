@@ -408,7 +408,7 @@ async def update_gameweek(gw_id: int, **kwargs):
 
 async def get_cached_match(match_id: str) -> Optional[dict]:
     try:
-        res = _get_sb().table("match_cache").select("*").eq("match_id", match_id).execute()
+        res = _get_sb().table("match_cache").select("*").eq("match_id", str(match_id)).execute()
         if res.data:
             row = res.data[0]
             for f in ("events", "player_stats"):
@@ -425,7 +425,7 @@ async def get_cached_match(match_id: str) -> Optional[dict]:
 async def save_match_cache(match: dict):
     try:
         _get_sb().table("match_cache").upsert({
-            "match_id":          match["id"],
+            "match_id":          str(match["id"]),
             "home_team":         match.get("home_team", ""),
             "away_team":         match.get("away_team", ""),
             "home_team_id":      str(match.get("home_team_id", "") or ""),
@@ -450,7 +450,7 @@ async def mark_match_points_awarded(match_id: str):
     try:
         _get_sb().table("match_cache").update(
             {"points_awarded": True}
-        ).eq("match_id", match_id).execute()
+        ).eq("match_id", str(match_id)).execute()
     except Exception as e:
         logger.error("mark_match_points_awarded error: %s", e)
 
@@ -459,7 +459,7 @@ async def update_match_last_checked(match_id: str):
     try:
         _get_sb().table("match_cache").update(
             {"last_checked": int(time.time())}
-        ).eq("match_id", match_id).execute()
+        ).eq("match_id", str(match_id)).execute()
     except Exception as e:
         logger.error("update_match_last_checked error: %s", e)
 
@@ -505,7 +505,7 @@ async def update_match_cache(match_id: str, fields: dict):
         data = {}
         for k, v in fields.items():
             data[k] = json.dumps(v) if isinstance(v, (list, dict)) else v
-        _get_sb().table("match_cache").update(data).eq("match_id", match_id).execute()
+        _get_sb().table("match_cache").update(data).eq("match_id", str(match_id)).execute()
     except Exception as e:
         logger.error("update_match_cache error: %s", e)
 
