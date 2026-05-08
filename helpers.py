@@ -109,8 +109,11 @@ def build_squad_visual(squad: dict, formation: str, captain_id: str = "",
 
 
 def calc_squad_cost(squad: dict) -> int:
+    NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
     total = 0
-    for pid in squad.values():
+    for k, pid in squad.items():
+        if k in NON_PLAYER_KEYS:
+            continue
         if isinstance(pid, str) and pid:
             p = pl_module.get_player(pid)
             if p:
@@ -122,6 +125,7 @@ def squad_is_complete(squad: dict, formation: str) -> bool:
     """Check if squad has 15 filled player slots."""
     if not squad:
         return False
+    NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
     count = sum(1 for k, v in squad.items()
-                if isinstance(v, str) and v and k not in ("formation", "telegram_id"))
+                if isinstance(v, str) and v and k not in NON_PLAYER_KEYS)
     return count >= 15
