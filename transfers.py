@@ -200,9 +200,11 @@ async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
         squad[slot_out] = pid_in
         await sheets.save_squad(uid, squad)
         # Auto-confirm with new squad for current active GW
-        captain = (user or {}).get("captain", "")
+        captain   = (user or {}).get("captain", "")
+        formation = (user or {}).get("formation", "4-3-3")
         snapshot = dict(squad)
-        snapshot["captain"] = captain
+        snapshot["captain"]   = captain
+        snapshot["formation"] = formation
         active_gw = await sheets.get_active_gameweek()
         if active_gw:
             await sheets.confirm_squad(uid, active_gw["id"], snapshot)
