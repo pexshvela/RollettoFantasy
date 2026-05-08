@@ -258,10 +258,7 @@ async def award_points(match: dict, bot=None):
     # Log unmatched players for debugging
     for key, stats in player_stats_raw.items():
         api_name = stats.get("name", "")
-        pid_norm = _norm(api_name)
-        matched  = any(p["name"] == find_player_by_name(api_name)["name"]
-                       for p in [find_player_by_name(api_name)] if p)                    if find_player_by_name(api_name) else False
-        if not find_player_by_name(api_name):
+        if api_name and not find_player_by_name(api_name):
             logger.warning("NO MATCH for API player: '%s'", api_name)
         else:
             logger.debug("Matched '%s' -> '%s'", api_name, find_player_by_name(api_name)["name"])
@@ -386,8 +383,9 @@ async def award_points(match: dict, bot=None):
                 else:
                     logger.warning("User %s: DB squad also has invalid IDs!", uid)
 
-        captain_id = user_row.get("captain", "")
-        formation  = user_row.get("formation", "4-3-3")
+        # Prefer captain/formation from snapshot (deterministic), fallback to current user state
+        captain_id = squad_snapshot.get("captain") or user_row.get("captain", "")
+        formation  = squad_snapshot.get("formation") or user_row.get("formation", "4-3-3")
 
         logger.info("User %s: formation=%s captain=%s snap_keys=%s",
                     uid, formation, captain_id, list(squad_snapshot.keys())[:5])
@@ -424,7 +422,7 @@ async def award_points(match: dict, bot=None):
             user_points_rows.append({
                 "telegram_id": uid,
                 "player_id":   pid,
-                "match_id":    mid,
+                "match_id":    str(mid),
                 "gameweek_id": gw_id,
                 "points":      final_pts,
                 "breakdown":   _json.dumps(breakdown),
@@ -468,18 +466,17 @@ async def award_points(match: dict, bot=None):
 
 
 async def broadcast_result(bot, match: dict):
+    from translations import t as _t
     users = await sheets.get_all_users()
-    text  = (
-        f"⚽ <b>Match Result</b>\n\n"
-        f"🏟 <b>{match['home_team']}</b> "
-        f"{match['home_score']} - {match['away_score']} "
-        f"<b>{match['away_team']}</b>\n\n"
-        f"🏆 Points updated! Tap 📊 <b>Stats</b> to see your score.\n"
-        f"🏆 Check the 🏆 <b>Leaderboard</b> for rankings."
-    )
     sent = 0
     for u in users:
         try:
+            lang = u.get("language", "en")
+            text = _t(lang, "notif_result",
+                     home=match["home_team"],
+                     hs=match["home_score"],
+                     as_=match["away_score"],
+                     away=match["away_team"])
             await bot.send_message(int(u["telegram_id"]), text, parse_mode="HTML")
             sent += 1
             await asyncio.sleep(0.05)
