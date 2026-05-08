@@ -69,8 +69,9 @@ def _is_complete(squad: dict, formation: str = "4-3-3") -> bool:
     if all(squad.get(s) for s, _ in slots):
         return True
     # Fallback: count filled player slots
+    NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
     count = sum(1 for k, v in squad.items()
-                if isinstance(v, str) and v and k not in ("formation", "telegram_id"))
+                if isinstance(v, str) and v and k not in NON_PLAYER_KEYS)
     return count >= 15
 
 
@@ -585,7 +586,13 @@ async def confirm_squad(callback: CallbackQuery, state: FSMContext):
         return
 
     await sheets.save_squad(uid, dict(squad, formation=formation))
-    await sheets.confirm_squad(uid, gw["id"], squad)
+    # Update users.captain and users.formation to match what's being confirmed
+    await sheets.update_user(uid, captain=captain, formation=formation)
+    # Save snapshot with captain + formation embedded so scoring is deterministic
+    snapshot = dict(squad)
+    snapshot["captain"] = captain
+    snapshot["formation"] = formation
+    await sheets.confirm_squad(uid, gw["id"], snapshot)
     import config as _config
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 " + t(lang, "btn_squad"), callback_data="home:squad")
@@ -812,9 +819,11 @@ async def swap_do(callback: CallbackQuery, state: FSMContext):
     await sheets.save_squad(uid, squad)
 
     # Save confirmation for the current active/upcoming gameweek with the new squad
-    captain  = (user or {}).get("captain", "")
+    captain   = (user or {}).get("captain", "")
+    formation = (user or {}).get("formation", "4-3-3")
     snapshot = dict(squad)
-    snapshot["captain"] = captain
+    snapshot["captain"]   = captain
+    snapshot["formation"] = formation
     # Use current active/upcoming GW, or fall back to latest existing confirmation's GW
     active_gw = await sheets.get_active_gameweek()
     if active_gw:
