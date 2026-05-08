@@ -733,6 +733,48 @@ async def is_before_deadline() -> bool:
     return now < deadline
 
 
+async def is_player_locked(player_id: str) -> bool:
+    """A player is locked while their match is in progress.
+    Returns True if any of the player's team matches has kicked off but not finished yet.
+    Returns False if no match is currently in progress for this team
+    (either no match scheduled, or all are finished, or none has kicked off yet)."""
+    try:
+        from players import get_player
+        p = get_player(player_id)
+        if not p:
+            return False
+        team = p.get("team", "")
+        if not team:
+            return False
+        sb = _get_sb()
+        res = sb.table("match_cache").select(
+            "match_id,home_team,away_team,kickoff_timestamp,status,points_awarded"
+        ).execute()
+        team_norm = team.lower().strip()
+        FINAL_STATUSES = {"final", "ft", "match finished", "aet", "pen", "finished"}
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for m in (res.data or []):
+            home = (m.get("home_team") or "").lower().strip()
+            away = (m.get("away_team") or "").lower().strip()
+            if not (team_norm in home or home in team_norm or
+                    team_norm in away or away in team_norm):
+                continue
+            status = str(m.get("status") or "").lower()
+            # Skip matches that are already finished
+            if status in FINAL_STATUSES or m.get("points_awarded"):
+                continue
+            ts = m.get("kickoff_timestamp") or 0
+            if not ts:
+                continue
+            # Match has kicked off and is not yet finished — player is locked
+            if now_ts >= ts:
+                return True
+        return False
+    except Exception as e:
+        logger.error("is_player_locked error: %s", e)
+        return False
+
+
 # ── Reset ─────────────────────────────────────────────────────────────────────
 
 async def reset_user(telegram_id: int):
