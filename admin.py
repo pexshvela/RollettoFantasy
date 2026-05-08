@@ -390,6 +390,40 @@ async def cmd_syncmatches(message: Message, state: FSMContext):
     )
 
 
+@router.message(Command("windows"))
+async def cmd_windows(message: Message, state: FSMContext):
+    """Show all kickoff windows: when sub swaps lock and unlock."""
+    if not is_admin(message.from_user.id):
+        return
+    from datetime import datetime as _dt, timezone as _tz
+    windows = await sheets.get_kickoff_windows()
+    if not windows:
+        await message.answer("No upcoming matches in cache. Run /syncmatches first.")
+        return
+    now_ts = _dt.now(_tz.utc).timestamp()
+    lines = ["🕒 <b>Kickoff Windows</b>\n"]
+    for w in windows[:12]:
+        ko = _dt.fromtimestamp(w["kickoff_ts"], tz=_tz.utc)
+        dl = _dt.fromtimestamp(w["deadline_ts"], tz=_tz.utc)
+        lock_start = w["kickoff_ts"] - 3600
+        if w["all_done"]:
+            state_emoji = "✅"
+            state_str = "finished — swaps open"
+        elif now_ts < lock_start:
+            state_emoji = "🟢"
+            state_str = "swaps open"
+        else:
+            state_emoji = "🔒"
+            state_str = "swaps LOCKED"
+        n_matches = len(w["matches"])
+        lines.append(
+            f"{state_emoji} <b>{ko.strftime('%a %m-%d %H:%M')}</b> UTC — "
+            f"{n_matches} match{'es' if n_matches > 1 else ''}\n"
+            f"   lock from {dl.strftime('%H:%M')} | {state_str}"
+        )
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 @router.message(Command("rounds"))
 async def cmd_rounds(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -580,7 +614,8 @@ async def cmd_autodeadline(message: Message, state: FSMContext):
         f"✅ Auto-deadline set for <b>{round_label}</b>\n"
         f"⏰ <b>{deadline_dt.strftime('%Y-%m-%d %H:%M')} UTC</b>\n"
         f"(1 hour before first kickoff)\n\n"
-        f"<i>Note: After deadline, sub swaps still allowed per-player until each player's match kicks off.</i>",
+        f"<i>Sub swaps are open between matches and locked during each kickoff window\n"
+        f"(1h before kickoff until all matches in the window finish).</i>",
         parse_mode="HTML"
     )
 
