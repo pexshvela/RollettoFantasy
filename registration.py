@@ -263,11 +263,25 @@ async def _home_text(user: dict, lang: str) -> str:
     if rnd:
         round_label = rnd.get("name") or (f"Round {rnd['number']}" if rnd.get("number") else "—")
         status_parts.append(f"📅 Round: <b>{round_label}</b>")
-    deadline = rnd.get("deadline") if rnd else None
-    if not deadline:
-        deadline = await sheets.get_confirmation_deadline()
-    if deadline:
-        status_parts.append(f"⏰ Deadline: <b>{deadline[:16]}</b>")
+
+    # Show kickoff window status (next lock or current locked window)
+    from datetime import datetime as _dt, timezone as _tz
+    win = await sheets.get_next_window_status()
+    if win:
+        dl_str = _dt.fromtimestamp(win["deadline_ts"], tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+        ko_str = _dt.fromtimestamp(win["kickoff_ts"], tz=_tz.utc).strftime("%H:%M")
+        if win["state"] == "open":
+            status_parts.append(f"🟢 Swaps open until <b>{dl_str} UTC</b> (next kickoff {ko_str})")
+        else:
+            status_parts.append(f"🔒 Swaps locked — kickoff {ko_str} UTC")
+    else:
+        # Fallback: legacy confirmation_deadline if no windows
+        deadline = rnd.get("deadline") if rnd else None
+        if not deadline:
+            deadline = await sheets.get_confirmation_deadline()
+        if deadline:
+            status_parts.append(f"⏰ Deadline: <b>{deadline[:16]}</b>")
+
     if confirmed:
         status_parts.append("✅ Squad confirmed")
     else:
