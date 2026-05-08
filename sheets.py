@@ -733,46 +733,105 @@ async def is_before_deadline() -> bool:
     return now < deadline
 
 
-async def is_player_locked(player_id: str) -> bool:
-    """A player is locked while their match is in progress.
-    Returns True if any of the player's team matches has kicked off but not finished yet.
-    Returns False if no match is currently in progress for this team
-    (either no match scheduled, or all are finished, or none has kicked off yet)."""
+async def get_kickoff_windows() -> list[dict]:
+    """Group all upcoming/live matches into kickoff windows.
+    Matches within 30 minutes of each other share a window.
+    Returns list of {kickoff_ts, end_ts_estimate, deadline, match_ids, finished, all_done}.
+    Sorted by kickoff_ts ascending."""
     try:
-        from players import get_player
-        p = get_player(player_id)
-        if not p:
-            return False
-        team = p.get("team", "")
-        if not team:
-            return False
         sb = _get_sb()
         res = sb.table("match_cache").select(
             "match_id,home_team,away_team,kickoff_timestamp,status,points_awarded"
-        ).execute()
-        team_norm = team.lower().strip()
+        ).order("kickoff_timestamp").execute()
         FINAL_STATUSES = {"final", "ft", "match finished", "aet", "pen", "finished"}
-        now_ts = datetime.now(timezone.utc).timestamp()
-        for m in (res.data or []):
-            home = (m.get("home_team") or "").lower().strip()
-            away = (m.get("away_team") or "").lower().strip()
-            if not (team_norm in home or home in team_norm or
-                    team_norm in away or away in team_norm):
-                continue
-            status = str(m.get("status") or "").lower()
-            # Skip matches that are already finished
-            if status in FINAL_STATUSES or m.get("points_awarded"):
-                continue
-            ts = m.get("kickoff_timestamp") or 0
-            if not ts:
-                continue
-            # Match has kicked off and is not yet finished — player is locked
-            if now_ts >= ts:
-                return True
-        return False
+        # Filter to matches with a real kickoff timestamp
+        rows = [m for m in (res.data or []) if m.get("kickoff_timestamp")]
+        # Group by kickoff within 30 min
+        windows: list[dict] = []
+        for m in rows:
+            ts = m["kickoff_timestamp"]
+            placed = False
+            for w in windows:
+                if abs(ts - w["kickoff_ts"]) <= 1800:  # 30 min
+                    w["matches"].append(m)
+                    # Window kickoff is the EARLIEST in the group
+                    if ts < w["kickoff_ts"]:
+                        w["kickoff_ts"] = ts
+                    placed = True
+                    break
+            if not placed:
+                windows.append({"kickoff_ts": ts, "matches": [m]})
+        # Compute deadline (1h before earliest kickoff) and all_done flag
+        for w in windows:
+            w["deadline_ts"] = w["kickoff_ts"] - 3600
+            # Window's all_done = every match in it is finished or points awarded
+            all_done = True
+            for m in w["matches"]:
+                status = str(m.get("status") or "").lower()
+                if status not in FINAL_STATUSES and not m.get("points_awarded"):
+                    all_done = False
+                    break
+            w["all_done"]   = all_done
+            w["match_ids"]  = [m["match_id"] for m in w["matches"]]
+        return windows
     except Exception as e:
-        logger.error("is_player_locked error: %s", e)
-        return False
+        logger.error("get_kickoff_windows error: %s", e)
+        return []
+
+
+async def is_swap_window_open() -> bool:
+    """Sub swaps are open if NO kickoff window is currently in its locked period.
+    Locked period = from (kickoff - 1h) until all matches in window are finished."""
+    try:
+        windows = await get_kickoff_windows()
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for w in windows:
+            # Window is locked from (kickoff - 1h) until all matches finished
+            lock_start = w["kickoff_ts"] - 3600
+            if now_ts < lock_start:
+                continue  # window not started yet
+            if w["all_done"]:
+                continue  # window finished
+            return False  # we are inside a locked window
+        return True  # no active locked window
+    except Exception as e:
+        logger.error("is_swap_window_open error: %s", e)
+        return True  # fail-open
+
+
+async def get_next_window_status() -> dict | None:
+    """Return info about the most relevant window for display:
+    {state: 'open'|'locked'|'before_first', deadline_ts, kickoff_ts, all_done}.
+    Used to show users the next deadline."""
+    try:
+        windows = await get_kickoff_windows()
+        if not windows:
+            return None
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for w in windows:
+            lock_start = w["kickoff_ts"] - 3600
+            if w["all_done"]:
+                continue
+            if now_ts < lock_start:
+                # Next deadline is this window's lock_start
+                return {
+                    "state": "open",
+                    "deadline_ts": lock_start,
+                    "kickoff_ts": w["kickoff_ts"],
+                    "all_done": False,
+                }
+            else:
+                # Currently locked
+                return {
+                    "state": "locked",
+                    "deadline_ts": lock_start,
+                    "kickoff_ts": w["kickoff_ts"],
+                    "all_done": False,
+                }
+        return None
+    except Exception as e:
+        logger.error("get_next_window_status error: %s", e)
+        return None
 
 
 # ── Reset ─────────────────────────────────────────────────────────────────────
