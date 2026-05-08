@@ -146,7 +146,7 @@ async def cmd_recheck(message: Message, state: FSMContext):
             "status": "upcoming",
             "last_checked": 0,
             "points_awarded": False
-        }).eq("match_id", match_id).execute()
+        }).eq("match_id", str(match_id)).execute()
         await message.answer(
             f"✅ Match <code>{match_id}</code> queued for recheck.\n"
             f"The scheduler will fetch the result within 5 minutes.",
