@@ -152,6 +152,28 @@ async def pick_player_in(callback: CallbackQuery, state: FSMContext):
     p_out = get_player(pid_out)
     p_in  = get_player(pid_in)
 
+    # Max players per club rule (excluding the player being transferred out)
+    squad_current = data.get("squad") or await sheets.get_squad(uid) or {}
+    NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
+    same_club_count = 0
+    for k, other_pid in squad_current.items():
+        if k in NON_PLAYER_KEYS:
+            continue
+        if other_pid == pid_out:
+            continue  # this slot is being vacated
+        if not isinstance(other_pid, str) or not other_pid:
+            continue
+        other_p = get_player(other_pid)
+        if other_p and p_in and other_p.get("team") == p_in.get("team"):
+            same_club_count += 1
+    if p_in and same_club_count >= config.MAX_PLAYERS_PER_CLUB:
+        await callback.answer(
+            f"❌ Max {config.MAX_PLAYERS_PER_CLUB} players per club! "
+            f"You already have {same_club_count} from {p_in.get('team')}.",
+            show_alert=True
+        )
+        return
+
     # Calculate cost
     remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
     cost = 0 if remaining_free > 0 or free_n == 0 else config.EXTRA_TRANSFER_COST
