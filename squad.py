@@ -368,6 +368,25 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    # Max players per club rule
+    NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
+    same_club_count = 0
+    for k, other_pid in squad.items():
+        if k in NON_PLAYER_KEYS or k == slot:
+            continue  # skip non-player keys and the slot we're replacing
+        if not isinstance(other_pid, str) or not other_pid:
+            continue
+        other_p = get_player(other_pid)
+        if other_p and other_p.get("team") == p.get("team"):
+            same_club_count += 1
+    if same_club_count >= config.MAX_PLAYERS_PER_CLUB:
+        await callback.answer(
+            f"❌ Max {config.MAX_PLAYERS_PER_CLUB} players per club! "
+            f"You already have {same_club_count} from {p.get('team')}.",
+            show_alert=True
+        )
+        return
+
     squad[slot] = pid
     await state.update_data(squad=squad)
 
