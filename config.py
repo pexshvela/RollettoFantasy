@@ -23,8 +23,10 @@ API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 
 # Fantasy settings
 TOTAL_BUDGET           = int(os.getenv("TOTAL_BUDGET", "100000000"))  # 100M
-FREE_TRANSFERS_DEFAULT = int(os.getenv("FREE_TRANSFERS_DEFAULT", "2"))
+FREE_TRANSFERS_DEFAULT = int(os.getenv("FREE_TRANSFERS_DEFAULT", "1"))  # 1 per GW (official)
+MAX_BANKED_TRANSFERS   = int(os.getenv("MAX_BANKED_TRANSFERS", "5"))    # bank up to 5
 EXTRA_TRANSFER_COST    = int(os.getenv("EXTRA_TRANSFER_COST", "4"))  # -4 pts
+MAX_PLAYERS_PER_CLUB   = int(os.getenv("MAX_PLAYERS_PER_CLUB", "3"))  # max per club
 
 # Rolletto signup URL
 ROLLETTO_SIGNUP_URL = os.getenv("ROLLETTO_SIGNUP_URL", "https://rolletto.com")
@@ -35,7 +37,7 @@ TOURNAMENT_PL  = "pl"
 
 # api-football league IDs
 LEAGUE_IDS = {
-    "ucl": {"league": 2,  "season": 2025},  # UCL 2025/26
+    "ucl": {"league": 2,  "season": 2024},  # UCL 2024/25
     "pl":  {"league": 39, "season": 2025},  # PL 2025/26
 }
 
