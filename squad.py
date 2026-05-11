@@ -229,13 +229,17 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
         confirmed = True
 
     if squad and _is_complete(squad, formation):
-        before_dl = await sheets.is_before_deadline()
+        before_dl   = await sheets.is_before_deadline()
+        swaps_open  = await sheets.is_swap_window_open()
         kb = InlineKeyboardBuilder()
         if confirmed:
+            # Captain change + rebuild: only before round deadline
             if before_dl:
                 kb.button(text="⭐ Change Captain",   callback_data="squad:pick_captain")
-                kb.button(text=t(lang, "btn_swap_subs"), callback_data="squad:swap_subs")
                 kb.button(text="🔄 Change Team",       callback_data="squad:change_confirmed")
+            # Sub swaps: available whenever a kickoff window isn't locked
+            if swaps_open:
+                kb.button(text=t(lang, "btn_swap_subs"), callback_data="squad:swap_subs")
         else:
             if before_dl:
                 kb.button(text="⭐ Change Captain", callback_data="squad:pick_captain")
