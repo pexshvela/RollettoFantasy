@@ -12,7 +12,10 @@ All players:
   Red card:            -3
   Yellow + Red:        -4
   Own goal:            -2
-  Def actions per 3:   +1  (tackles + interceptions + blocks)
+  Defensive Contributions (official FPL 2025/26):
+    DEF with 10+ CBIT (clearances+blocks+interceptions+tackles): +2
+    MID/FW with 12+ CBIRT (CBIT + recoveries):                    +2
+  Player of the Match (highest rating in fixture, min 1+ rating): +3
 
 GK:  Goal +6, Pen saved +5, CS(60+) +4, Conceded/2 -1, Saves/3 +1
 DEF: Goal +6, CS(60+) +4, Conceded/2 -1
@@ -64,11 +67,23 @@ def calc_points(player_id: str, stats: dict) -> int:
         pts += saves // 3
         pts += int(stats.get("penalty_saved") or 0) * 5
 
-    # Defensive actions per 3
+    # Defensive Contributions (official FPL 2025/26 rule)
+    # DEF: 10+ CBIT (clearances+blocks+interceptions+tackles) → +2
+    # MID/FW: 12+ CBIRT (CBIT + recoveries) → +2
+    # Note: API doesn't expose "clearances" or "recoveries" cleanly, so we use
+    # tackles + interceptions + blocks as the best available proxy.
     tackles       = int(stats.get("tackles") or 0)
     interceptions = int(stats.get("interceptions") or 0)
     blocks        = int(stats.get("blocks") or 0)
-    pts += (tackles + interceptions + blocks) // 3
+    def_acts      = tackles + interceptions + blocks
+    if pos == "DEF" and def_acts >= 10:
+        pts += 2
+    elif pos in ("MF", "FW") and def_acts >= 12:
+        pts += 2
+
+    # Player of the Match bonus (+3)
+    if stats.get("is_motm"):
+        pts += 3
 
     # Cards
     yellow      = int(stats.get("yellow_cards") or 0)
@@ -115,9 +130,18 @@ def build_breakdown(player_id: str, stats: dict, is_captain: bool) -> dict:
     interceptions = int(stats.get("interceptions") or 0)
     blks          = int(stats.get("blocks") or 0)
     def_acts      = tackles + interceptions + blks
+    is_motm       = bool(stats.get("is_motm"))
 
     goal_pts = {"GK": 6, "DEF": 6, "MF": 5, "FW": 4}.get(pos, 4)
     cs_pts   = {"GK": 4, "DEF": 4, "MF": 1, "FW": 0}.get(pos, 0)
+
+    # Defensive contribution threshold check
+    if pos == "DEF":
+        pts_def = 2 if def_acts >= 10 else 0
+    elif pos in ("MF", "FW"):
+        pts_def = 2 if def_acts >= 12 else 0
+    else:
+        pts_def = 0
 
     raw  = calc_points(player_id, stats)
     final= raw * 2 if is_captain else raw
@@ -138,6 +162,7 @@ def build_breakdown(player_id: str, stats: dict, is_captain: bool) -> dict:
         "own_goals":        own_g,
         "clean_sheet":      clean,
         "def_actions":      def_acts,
+        "is_motm":          is_motm,
         "pts_appearance":   (1 if minutes > 0 else 0) + (1 if minutes >= 60 else 0),
         "pts_goals":        goals * goal_pts,
         "pts_assists":      assists * 3,
@@ -152,7 +177,8 @@ def build_breakdown(player_id: str, stats: dict, is_captain: bool) -> dict:
         "pts_red":          red * -3,
         "pts_yr":           yr * -1,
         "pts_own_goals":    own_g * -2,
-        "pts_def_actions":  def_acts // 3,
+        "pts_def_actions":  pts_def,
+        "pts_motm":         3 if is_motm else 0,
         "captain":          is_captain,
         "captain_mult":     2 if is_captain else 1,
         "base_pts":         raw,
