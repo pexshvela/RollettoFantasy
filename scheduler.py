@@ -65,10 +65,61 @@ async def _sync_missing_matches():
         logger.warning("_sync_missing_matches error: %s", e)
 
 
+async def check_completed_windows(bot):
+    """When a kickoff window fully completes, push a fresh home menu to every user
+    so they see updated points and that swaps are open again."""
+    if not bot:
+        return
+    try:
+        windows = await sheets.get_kickoff_windows()
+        if not windows:
+            return
+        last_pushed = await sheets.get_setting("last_window_pushed_ts", "0")
+        try:
+            last_pushed = int(last_pushed)
+        except Exception:
+            last_pushed = 0
+        now_ts = int(time.time())
+        # Find the most recent FULLY-DONE window we haven't broadcast yet
+        max_done_ts = 0
+        for w in windows:
+            if w["all_done"] and w["kickoff_ts"] > last_pushed:
+                if w["kickoff_ts"] > max_done_ts:
+                    max_done_ts = w["kickoff_ts"]
+        if max_done_ts == 0:
+            return  # nothing new to push
+        # All windows that finished AT OR BEFORE max_done_ts are "covered" by this push
+        logger.info("Window completed (kickoff_ts=%s) — pushing home to all users", max_done_ts)
+        users = await sheets.get_all_users()
+        from registration import _push_home
+        pushed = 0
+        for u in users:
+            uid = int(u["telegram_id"])
+            try:
+                lang = u.get("language", "en")
+                await _push_home(bot, uid, u, lang)
+                pushed += 1
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.warning("Could not push home to %s: %s", uid, e)
+        await sheets.set_setting("last_window_pushed_ts", str(max_done_ts))
+        logger.info("Window-completion home push sent to %d users", pushed)
+    except Exception as e:
+        logger.error("check_completed_windows error: %s", e)
+
+
 async def run_scheduler(bot=None):
     logger.info("Scheduler started.")
     # Sync missing matches on startup so no match is ever invisible to scheduler
     await _sync_missing_matches()
+    # On startup, mark any already-completed windows as pushed so we don't spam
+    try:
+        windows = await sheets.get_kickoff_windows()
+        max_ts = max((w["kickoff_ts"] for w in windows if w["all_done"]), default=0)
+        if max_ts:
+            await sheets.set_setting("last_window_pushed_ts", str(max_ts))
+    except Exception:
+        pass
     _first_run = True
     while True:
         try:
@@ -78,6 +129,7 @@ async def run_scheduler(bot=None):
                 await check_deadline_notifications(bot)
                 await check_transfer_window_notifications(bot)
                 await check_admin_reminders(bot)
+                await check_completed_windows(bot)
             _first_run = False
         except Exception as e:
             logger.error("Scheduler error: %s", e)
