@@ -173,6 +173,13 @@ async def get_player_stats(fixture_id: str) -> dict | None:
 
             minutes = int(games.get("minutes") or 0)
 
+            # Rating: API returns string like "7.5", may be None
+            rating_raw = games.get("rating")
+            try:
+                rating = float(rating_raw) if rating_raw else 0.0
+            except Exception:
+                rating = 0.0
+
             entry = {
                 "name":             name,
                 "player_id":        pid,
@@ -180,6 +187,7 @@ async def get_player_stats(fixture_id: str) -> dict | None:
                 "position":         games.get("position", ""),
                 "minutes_played":   minutes,
                 "in_lineup":        minutes > 0,
+                "rating":           rating,
                 "goals":            int(goals_s.get("total") or 0),
                 "own_goals":        int(goals_s.get("owngoals") or 0),
                 "assists":          int(goals_s.get("assists") or 0),
@@ -194,6 +202,7 @@ async def get_player_stats(fixture_id: str) -> dict | None:
                 "tackles":          int(tackles_s.get("total") or 0),
                 "interceptions":    int(tackles_s.get("interceptions") or 0),
                 "blocks":           int(tackles_s.get("blocks") or 0),
+                "is_motm":          False,
                 "goals_conceded":   0,
                 "clean_sheet":      False,
             }
