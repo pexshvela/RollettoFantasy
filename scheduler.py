@@ -221,6 +221,30 @@ async def award_points(match: dict, bot=None):
     player_stats_raw = match.get("player_stats") or {}
     played_ids       = set(match.get("played_ids") or set())
 
+    # Mark Player of the Match — highest rating among players who actually played
+    try:
+        # player_stats_raw maps both pid AND name.lower() to same entry — dedupe by id
+        seen_ids = set()
+        candidates = []
+        for key, st in player_stats_raw.items():
+            api_id = str(st.get("player_id") or "")
+            if not api_id or api_id in seen_ids:
+                continue
+            seen_ids.add(api_id)
+            if int(st.get("minutes_played") or 0) <= 0:
+                continue
+            rating = float(st.get("rating") or 0)
+            if rating > 0:
+                candidates.append((rating, st))
+        if candidates:
+            candidates.sort(key=lambda x: -x[0])
+            top_rating, top_stats = candidates[0]
+            # Mark the entry — both pid and name keys point to same dict
+            top_stats["is_motm"] = True
+            logger.info("MOTM: %s (rating %.1f)", top_stats.get("name"), top_rating)
+    except Exception as e:
+        logger.warning("MOTM detection failed: %s", e)
+
     # Also add players from lineups home/away starters and subs to played_ids
     # This handles cases where player_stats has 0 minutes but player actually played
     lineups = match.get("lineups") or {}
