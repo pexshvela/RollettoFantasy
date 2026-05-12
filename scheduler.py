@@ -162,6 +162,13 @@ async def check_due_matches(bot=None):
         if not mid or not kickoff_ts:
             continue
 
+        # Skip very old matches (more than 7 days past kickoff) — these are likely
+        # stale leftovers from sync. Mark as awarded to silence them permanently.
+        if now - kickoff_ts > 7 * 24 * 3600:
+            await sheets.mark_match_points_awarded(mid)
+            logger.info("Auto-silenced old match %s (older than 7 days)", mid)
+            continue
+
         # Not due yet
         if now < kickoff_ts + MATCH_DUE_MIN:
             continue
@@ -211,7 +218,10 @@ async def process_match(match_id: str, cached: dict, bot=None):
     if not full.get("player_stats"):
         logger.warning("No player stats for %s — broadcasting result only", match_id)
         if bot:
-            await broadcast_result(bot, full)
+            kickoff_ts = int(full.get("kickoff_timestamp") or 0)
+            now_ts = int(time.time())
+            if kickoff_ts and (now_ts - kickoff_ts) <= 24 * 3600:
+                await broadcast_result(bot, full)
         return
 
     await award_points(full, bot)
@@ -548,7 +558,14 @@ async def award_points(match: dict, bot=None):
     await sheets.mark_match_points_awarded(mid)
 
     if bot:
-        await broadcast_result(bot, match)
+        # Only broadcast if match ended recently (within 24h) — avoid spam when
+        # backfilling old matches via /recheck or /recalculate_all
+        kickoff_ts = int(match.get("kickoff_timestamp") or 0)
+        now_ts = int(time.time())
+        if kickoff_ts and (now_ts - kickoff_ts) <= 24 * 3600:
+            await broadcast_result(bot, match)
+        else:
+            logger.info("Skipping broadcast for match %s — older than 24h", mid)
 
 
 async def broadcast_result(bot, match: dict):
