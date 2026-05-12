@@ -122,12 +122,16 @@ async def run_scheduler(bot=None):
     logger.info("Scheduler started.")
     # Sync missing matches on startup so no match is ever invisible to scheduler
     await _sync_missing_matches()
-    # On startup, mark any already-completed windows as pushed so we don't spam
+    # On startup, only mark old completed windows as pushed IF the setting
+    # already exists (i.e. we've run before). Don't suppress notifications
+    # on the very first deploy or after the setting was cleared.
     try:
-        windows = await sheets.get_kickoff_windows()
-        max_ts = max((w["kickoff_ts"] for w in windows if w["all_done"]), default=0)
-        if max_ts:
-            await sheets.set_setting("last_window_pushed_ts", str(max_ts))
+        existing = await sheets.get_setting("last_window_pushed_ts", None)
+        if existing is not None:
+            windows = await sheets.get_kickoff_windows()
+            max_ts = max((w["kickoff_ts"] for w in windows if w["all_done"]), default=0)
+            if max_ts and max_ts > int(existing or 0):
+                await sheets.set_setting("last_window_pushed_ts", str(max_ts))
     except Exception:
         pass
     _first_run = True
@@ -413,15 +417,15 @@ async def award_points(match: dict, bot=None):
     ).execute()
     gw_confs = {int(r["telegram_id"]): _parse_snap(r) for r in (gw_confs_res.data or [])}
 
-    # Fetch latest confirmation per user (for carry-forward) in one query
+    # Fetch ALL confirmations per user (for carry-forward logic in one query)
+    # We need to find the latest confirmation at or before each match's gameweek
     all_confs_res = sheets._get_sb().table("confirmations").select("*").order(
         "gameweek_id", desc=True
     ).execute()
-    latest_confs: dict[int, dict] = {}
+    user_confs_history: dict[int, list[dict]] = {}
     for r in (all_confs_res.data or []):
         uid_r = int(r["telegram_id"])
-        if uid_r not in latest_confs:
-            latest_confs[uid_r] = _parse_snap(r)
+        user_confs_history.setdefault(uid_r, []).append(_parse_snap(r))
 
     user_totals_batch: dict[int, int] = {}
 
@@ -430,20 +434,27 @@ async def award_points(match: dict, bot=None):
 
         confirmation = gw_confs.get(uid)
         if not confirmation:
-            # Carry forward latest confirmation to current GW automatically
-            confirmation = latest_confs.get(uid)
-            if confirmation:
+            # Carry forward: find latest confirmation AT OR BEFORE this gameweek_id.
+            # NEVER use a future confirmation — user shouldn't get points for matches
+            # that happened before they joined / confirmed.
+            history = user_confs_history.get(uid, [])
+            # history is sorted desc by gameweek_id; find first one with gameweek_id <= gw_id
+            past_conf = None
+            for c in history:
+                if int(c.get("gameweek_id") or 0) <= gw_id:
+                    past_conf = c
+                    break
+            if past_conf:
                 # Auto-create confirmation for current GW with same squad
-                snap = confirmation.get("squad_snapshot") or {}
+                snap = past_conf.get("squad_snapshot") or {}
                 if isinstance(snap, str):
                     try: snap = _json.loads(snap)
                     except Exception: snap = {}
                 await sheets.confirm_squad(uid, gw_id, snap)
-                # Update in-memory so squad_snapshot below gets the parsed dict
-                confirmation = dict(confirmation)
+                confirmation = dict(past_conf)
                 confirmation["squad_snapshot"] = snap
         if not confirmation:
-            continue  # Never confirmed → 0 points
+            continue  # Never confirmed before this match — no points → 0 points
 
         squad_snapshot = confirmation.get("squad_snapshot") or {}
         # Supabase sometimes returns squad_snapshot as a JSON string — parse it
@@ -562,8 +573,11 @@ async def award_points(match: dict, bot=None):
         # backfilling old matches via /recheck or /recalculate_all
         kickoff_ts = int(match.get("kickoff_timestamp") or 0)
         now_ts = int(time.time())
-        if kickoff_ts and (now_ts - kickoff_ts) <= 24 * 3600:
+        recent = kickoff_ts and (now_ts - kickoff_ts) <= 24 * 3600
+        if recent:
             await broadcast_result(bot, match)
+            # Also check if this match completed a kickoff window — push fresh home
+            await check_completed_windows(bot)
         else:
             logger.info("Skipping broadcast for match %s — older than 24h", mid)
 
