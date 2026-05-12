@@ -434,25 +434,20 @@ async def award_points(match: dict, bot=None):
 
         confirmation = gw_confs.get(uid)
         if not confirmation:
-            # Carry forward: find latest confirmation AT OR BEFORE this gameweek_id.
-            # NEVER use a future confirmation — user shouldn't get points for matches
-            # that happened before they joined / confirmed.
+            # Carry forward (READ-ONLY): find latest confirmation AT OR BEFORE this
+            # gameweek_id. Do NOT write back to DB — that would corrupt history
+            # by creating fake confirmation rows for gameweeks the user never confirmed.
             history = user_confs_history.get(uid, [])
-            # history is sorted desc by gameweek_id; find first one with gameweek_id <= gw_id
-            past_conf = None
             for c in history:
                 if int(c.get("gameweek_id") or 0) <= gw_id:
-                    past_conf = c
+                    # Use it directly (in-memory only)
+                    snap = c.get("squad_snapshot") or {}
+                    if isinstance(snap, str):
+                        try: snap = _json.loads(snap)
+                        except Exception: snap = {}
+                    confirmation = dict(c)
+                    confirmation["squad_snapshot"] = snap
                     break
-            if past_conf:
-                # Auto-create confirmation for current GW with same squad
-                snap = past_conf.get("squad_snapshot") or {}
-                if isinstance(snap, str):
-                    try: snap = _json.loads(snap)
-                    except Exception: snap = {}
-                await sheets.confirm_squad(uid, gw_id, snap)
-                confirmation = dict(past_conf)
-                confirmation["squad_snapshot"] = snap
         if not confirmation:
             continue  # Never confirmed before this match — no points → 0 points
 
