@@ -140,8 +140,20 @@ async def cmd_recheck(message: Message, state: FSMContext):
         await message.answer("Usage: /recheck MATCH_ID\nExample: /recheck 1540842")
         return
     match_id = parts[1].strip()
-    # Reset match cache so scheduler picks it up again
+    # If match not in cache, fetch and insert it first
     try:
+        existing = await sheets.get_cached_match(match_id)
+        if not existing:
+            import football_api as _fapi
+            fixture = await _fapi.get_match_details(str(match_id))
+            if fixture:
+                fixture["points_awarded"] = False
+                await sheets.save_match_cache(fixture)
+                await message.answer(f"ℹ️ Match was not in cache — added now.")
+            else:
+                await message.answer(f"❌ Could not fetch match {match_id} from API.")
+                return
+        # Reset match cache so scheduler picks it up again
         sheets._get_sb().table("match_cache").update({
             "status": "upcoming",
             "last_checked": 0,
@@ -352,39 +364,44 @@ async def cmd_fixtures(message: Message, state: FSMContext):
 
 @router.message(Command("syncmatches"))
 async def cmd_syncmatches(message: Message, state: FSMContext):
-    """Add any missing matches from current + next round to match_cache without wiping."""
+    """Sync all matches in the next 14 days into match_cache."""
     if not is_admin(message.from_user.id):
         return
-    await message.answer("🔄 Syncing missing matches from API...")
+    await message.answer("🔄 Syncing missing matches from API (date range)...")
 
     import football_api as _fapi
+    from datetime import date, timedelta
     tournament = await sheets.get_tournament()
+    cfg = config.LEAGUE_IDS.get(tournament, config.LEAGUE_IDS["pl"])
+    date_from = (date.today() - timedelta(days=2)).isoformat()
+    date_to   = (date.today() + timedelta(days=14)).isoformat()
 
-    all_rounds = await _fapi.get_rounds(tournament)
-    current_str = await _fapi.get_current_round(tournament)
-    if not current_str or current_str not in all_rounds:
-        await message.answer("❌ Could not detect current round.")
+    code, data = await _fapi._get("/fixtures", {
+        "league": cfg["league"],
+        "season": cfg["season"],
+        "from":   date_from,
+        "to":     date_to,
+    })
+    if code != 200 or not data:
+        await message.answer(f"❌ API returned {code}")
         return
-    current_idx = all_rounds.index(current_str)
-    rounds_to_sync = all_rounds[current_idx: current_idx + 2]  # current + next
+    fixtures = [_fapi._parse_fixture(f) for f in (data.get("response") or [])]
 
     added = 0
     skipped = 0
-    for rnd_str in rounds_to_sync:
-        fixtures = await _fapi.get_round_fixtures_by_name(tournament, rnd_str)
-        for m in fixtures:
-            mid = str(m.get("id") or m.get("match_id", ""))
-            if not mid:
-                continue
-            existing = await sheets.get_cached_match(mid)
-            if existing:
-                skipped += 1
-                continue
-            await sheets.save_match_cache(m)
-            added += 1
+    for m in fixtures:
+        mid = str(m.get("id") or m.get("match_id", ""))
+        if not mid:
+            continue
+        existing = await sheets.get_cached_match(mid)
+        if existing:
+            skipped += 1
+            continue
+        await sheets.save_match_cache(m)
+        added += 1
 
     await message.answer(
-        f"✅ Sync complete.\n"
+        f"✅ Sync complete ({date_from} to {date_to}).\n"
         f"Added: {added} new matches\n"
         f"Already in cache: {skipped}"
     )
