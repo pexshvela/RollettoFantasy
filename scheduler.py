@@ -39,28 +39,38 @@ def _norm(s: str) -> str:
 
 
 async def _sync_missing_matches():
-    """On startup: ensure current + next round matches are in match_cache."""
+    """On startup: ensure all matches in the next 14 days are in match_cache.
+    Uses date-range API call instead of round-based, because API 'current round'
+    can lag behind real-world scheduling."""
     try:
+        from datetime import date, timedelta
         tournament = await sheets.get_tournament()
-        all_rounds = await football_api.get_rounds(tournament)
-        current_str = await football_api.get_current_round(tournament)
-        if not current_str or current_str not in all_rounds:
+        cfg = config.LEAGUE_IDS.get(tournament, config.LEAGUE_IDS["pl"])
+        date_from = (date.today() - timedelta(days=2)).isoformat()
+        date_to   = (date.today() + timedelta(days=14)).isoformat()
+        # Fetch fixtures in date range
+        code, data = await football_api._get("/fixtures", {
+            "league": cfg["league"],
+            "season": cfg["season"],
+            "from":   date_from,
+            "to":     date_to,
+        })
+        if code != 200 or not data:
+            logger.warning("_sync_missing_matches: API returned %s", code)
             return
-        current_idx = all_rounds.index(current_str)
-        rounds_to_sync = all_rounds[current_idx: current_idx + 2]  # current + next
+        fixtures = [football_api._parse_fixture(f) for f in (data.get("response") or [])]
         added = 0
-        for rnd_str in rounds_to_sync:
-            fixtures = await football_api.get_round_fixtures_by_name(tournament, rnd_str)
-            for m in fixtures:
-                mid = str(m.get("id") or m.get("match_id", ""))
-                if not mid:
-                    continue
-                existing = await sheets.get_cached_match(mid)
-                if not existing:
-                    await sheets.save_match_cache(m)
-                    added += 1
+        for m in fixtures:
+            mid = str(m.get("id") or m.get("match_id", ""))
+            if not mid:
+                continue
+            existing = await sheets.get_cached_match(mid)
+            if not existing:
+                await sheets.save_match_cache(m)
+                added += 1
         if added:
-            logger.info("Auto-synced %d missing matches for %s", added, rounds_to_sync)
+            logger.info("Auto-synced %d missing matches (date range %s to %s)",
+                        added, date_from, date_to)
     except Exception as e:
         logger.warning("_sync_missing_matches error: %s", e)
 
