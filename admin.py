@@ -140,31 +140,55 @@ async def cmd_recheck(message: Message, state: FSMContext):
         await message.answer("Usage: /recheck MATCH_ID\nExample: /recheck 1540842")
         return
     match_id = parts[1].strip()
-    # If match not in cache, fetch and insert it first
     try:
-        existing = await sheets.get_cached_match(match_id)
-        if not existing:
-            import football_api as _fapi
-            fixture = await _fapi.get_match_details(str(match_id))
-            if fixture:
-                fixture["points_awarded"] = False
-                await sheets.save_match_cache(fixture)
-                await message.answer(f"ℹ️ Match was not in cache — added now.")
-            else:
-                await message.answer(f"❌ Could not fetch match {match_id} from API.")
-                return
-        # Reset match cache so scheduler picks it up again
-        sheets._get_sb().table("match_cache").update({
-            "status": "upcoming",
-            "last_checked": 0,
-            "points_awarded": False
-        }).eq("match_id", str(match_id)).execute()
+        import football_api as _fapi
+        from scheduler import award_points
+
+        await message.answer(f"🔄 Rechecking match <code>{match_id}</code>...", parse_mode="HTML")
+
+        # 1. Fetch fresh data from API
+        full = await _fapi.fetch_full_match(str(match_id))
+        if not full:
+            await message.answer(f"❌ Could not fetch match {match_id} from API.")
+            return
+
+        # 2. Reset existing points for this match
+        sheets._get_sb().table("player_match_points").delete().eq(
+            "match_id", str(match_id)
+        ).execute()
+        # Save fresh match data to cache with points_awarded=false
+        full["points_awarded"] = False
+        await sheets.save_match_cache(full)
+
+        # 3. Score it now
+        await award_points(full, None)  # bot=None so broadcast_result is skipped
+
         await message.answer(
-            f"✅ Match <code>{match_id}</code> queued for recheck.\n"
-            f"The scheduler will fetch the result within 5 minutes.",
+            f"✅ Match scored: <b>{full['home_team']} {full['home_score']} - "
+            f"{full['away_score']} {full['away_team']}</b>",
             parse_mode="HTML"
         )
+
+        # 4. Push fresh home menu to every user (delete old + send new)
+        from registration import _push_home
+        users = await sheets.get_all_users()
+        pushed = 0
+        for u in users:
+            uid = int(u["telegram_id"])
+            try:
+                fresh_user = await sheets.get_user(uid)
+                if not fresh_user:
+                    continue
+                lang = fresh_user.get("language", "en")
+                await _push_home(message.bot, uid, fresh_user, lang)
+                pushed += 1
+                import asyncio
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.warning("recheck push home %s: %s", uid, e)
+        await message.answer(f"📬 Fresh home menu pushed to {pushed} users.")
     except Exception as e:
+        logger.exception("recheck failed")
         await message.answer(f"❌ Error: {e}")
 
 
