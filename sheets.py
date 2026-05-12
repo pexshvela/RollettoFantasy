@@ -321,25 +321,59 @@ async def get_active_gameweek() -> Optional[dict]:
 
 async def get_active_round() -> dict | None:
     """Return active round info: {number, name, round_str, deadline}.
-    Handles both numbered rounds (PL) and named rounds (UCL Semi-finals etc.)."""
+    Handles both numbered rounds (PL) and named rounds (UCL/WC knockouts).
+    Uses match_cache to determine the real current round (more reliable than
+    API's get_current_round which can lag behind real-world schedule)."""
     try:
         import football_api as _fapi
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         tournament = await get_tournament()
-        round_str = await _fapi.get_current_round(tournament)
-        if not round_str:
+
+        relevant_round = None
+        try:
+            sb = _get_sb()
+            twelve_h_ago = (_dt.now(_tz.utc) - _td(hours=12)).timestamp()
+            res = sb.table("match_cache").select(
+                "match_id,round,kickoff_timestamp,status,points_awarded"
+            ).order("kickoff_timestamp").execute()
+            rows = res.data or []
+            # earliest future-or-recent match's round
+            for m in rows:
+                ts = m.get("kickoff_timestamp") or 0
+                if ts >= twelve_h_ago:
+                    rnd = (m.get("round") or "").strip()
+                    if rnd:
+                        relevant_round = rnd
+                        break
+            # Fallback: most recent (last) match's round
+            if not relevant_round and rows:
+                for m in reversed(rows):
+                    rnd = (m.get("round") or "").strip()
+                    if rnd:
+                        relevant_round = rnd
+                        break
+        except Exception as inner:
+            logger.warning("get_active_round match_cache lookup failed: %s", inner)
+
+        # Last resort: ask API (note: API can be laggy)
+        if not relevant_round:
+            relevant_round = await _fapi.get_current_round(tournament)
+
+        if not relevant_round:
             gw = await get_active_gameweek()
             if gw:
                 return {"number": gw.get("id"), "name": gw.get("name", ""), "deadline": gw.get("deadline")}
             return None
-        num = _fapi.parse_round_number(round_str)  # None for knockout rounds
+
+        round_str = relevant_round
+        num = _fapi.parse_round_number(round_str)
         display = _fapi.round_display_name(round_str)
-        # Deadline key: use round_str slug for named rounds, number for numbered
         deadline_key = num if num is not None else round_str.lower().replace(" ", "_").replace("-", "_")
         deadline = await get_round_deadline(deadline_key)
         return {
-            "number": num,           # int or None
-            "name": display,         # "Round 35" or "Semi-finals"
-            "round_str": round_str,  # raw API string
+            "number": num,
+            "name": display,
+            "round_str": round_str,
             "deadline_key": deadline_key,
             "deadline": deadline,
         }
@@ -437,6 +471,7 @@ async def save_match_cache(match: dict):
             "match_time":        match.get("time", ""),
             "kickoff_timestamp": match.get("kickoff_timestamp", 0),
             "tournament":        match.get("tournament", ""),
+            "round":             match.get("round", ""),
             "events":            json.dumps(match.get("events", [])),
             "player_stats":      json.dumps(match.get("player_stats", {})),
             "points_awarded":    match.get("points_awarded", False),
