@@ -321,9 +321,8 @@ async def get_active_gameweek() -> Optional[dict]:
 
 async def get_active_round() -> dict | None:
     """Return active round info: {number, name, round_str, deadline}.
-    Handles both numbered rounds (PL) and named rounds (UCL/WC knockouts).
-    Uses match_cache to determine the real current round (more reliable than
-    API's get_current_round which can lag behind real-world schedule)."""
+    Picks the round with the most UPCOMING matches (not a single postponed
+    makeup match that would otherwise hijack the display)."""
     try:
         import football_api as _fapi
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
@@ -337,16 +336,27 @@ async def get_active_round() -> dict | None:
                 "match_id,round,kickoff_timestamp,status,points_awarded"
             ).order("kickoff_timestamp").execute()
             rows = res.data or []
-            # earliest future-or-recent match's round
+
+            # Count matches per round that are upcoming (or recent within 12h)
+            upcoming_by_round: dict[str, list[int]] = {}
             for m in rows:
                 ts = m.get("kickoff_timestamp") or 0
-                if ts >= twelve_h_ago:
-                    rnd = (m.get("round") or "").strip()
-                    if rnd:
-                        relevant_round = rnd
-                        break
-            # Fallback: most recent (last) match's round
-            if not relevant_round and rows:
+                if ts < twelve_h_ago:
+                    continue
+                rnd = (m.get("round") or "").strip()
+                if not rnd:
+                    continue
+                upcoming_by_round.setdefault(rnd, []).append(ts)
+
+            if upcoming_by_round:
+                # Pick the round with the most upcoming matches.
+                # On tie, pick the one with the earliest kickoff.
+                def score(item):
+                    rnd, kickoffs = item
+                    return (-len(kickoffs), min(kickoffs))
+                relevant_round = sorted(upcoming_by_round.items(), key=score)[0][0]
+            else:
+                # No upcoming matches — use most recent finished match's round
                 for m in reversed(rows):
                     rnd = (m.get("round") or "").strip()
                     if rnd:
