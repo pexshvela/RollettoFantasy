@@ -76,30 +76,41 @@ async def _sync_missing_matches():
 
 
 async def check_completed_windows(bot):
-    """When a kickoff window fully completes, push a fresh home menu to every user
-    so they see updated points and that swaps are open again."""
+    """When a kickoff window fully completes, push a fresh home menu to every user.
+    Tracks completed windows by their match_id set, not timestamps — much more
+    reliable than timestamp comparison."""
     if not bot:
         return
     try:
         windows = await sheets.get_kickoff_windows()
         if not windows:
             return
-        last_pushed = await sheets.get_setting("last_window_pushed_ts", "0")
-        try:
-            last_pushed = int(last_pushed)
-        except Exception:
-            last_pushed = 0
+
+        # Load the set of match_ids we've already pushed for
+        pushed_raw = await sheets.get_setting("pushed_window_match_ids", "")
+        already_pushed = set(x for x in str(pushed_raw).split(",") if x)
+
         now_ts = int(time.time())
-        # Find the most recent FULLY-DONE window we haven't broadcast yet
-        max_done_ts = 0
+        # A window is "newly complete" if: all_done AND kicked off within last 48h
+        # AND we haven't pushed for it yet
+        newly_complete = []
         for w in windows:
-            if w["all_done"] and w["kickoff_ts"] > last_pushed:
-                if w["kickoff_ts"] > max_done_ts:
-                    max_done_ts = w["kickoff_ts"]
-        if max_done_ts == 0:
-            return  # nothing new to push
-        # All windows that finished AT OR BEFORE max_done_ts are "covered" by this push
-        logger.info("Window completed (kickoff_ts=%s) — pushing home to all users", max_done_ts)
+            if not w["all_done"]:
+                continue
+            # Only care about recent windows — ignore ancient backfilled matches
+            if now_ts - w["kickoff_ts"] > 48 * 3600:
+                continue
+            wid = ",".join(sorted(str(m) for m in w["match_ids"]))
+            window_key = f"w:{wid}"
+            if window_key in already_pushed:
+                continue
+            newly_complete.append((w, window_key))
+
+        if not newly_complete:
+            return
+
+        logger.info("%d newly-completed window(s) — pushing home to all users",
+                    len(newly_complete))
         users = await sheets.get_all_users()
         from registration import _push_home
         pushed = 0
@@ -112,7 +123,13 @@ async def check_completed_windows(bot):
                 await asyncio.sleep(0.05)
             except Exception as e:
                 logger.warning("Could not push home to %s: %s", uid, e)
-        await sheets.set_setting("last_window_pushed_ts", str(max_done_ts))
+
+        # Mark these windows as pushed
+        for _w, window_key in newly_complete:
+            already_pushed.add(window_key)
+        # Keep only recent entries to avoid unbounded growth (last 50)
+        trimmed = list(already_pushed)[-50:]
+        await sheets.set_setting("pushed_window_match_ids", ",".join(trimmed))
         logger.info("Window-completion home push sent to %d users", pushed)
     except Exception as e:
         logger.error("check_completed_windows error: %s", e)
@@ -122,16 +139,25 @@ async def run_scheduler(bot=None):
     logger.info("Scheduler started.")
     # Sync missing matches on startup so no match is ever invisible to scheduler
     await _sync_missing_matches()
-    # On startup, only mark old completed windows as pushed IF the setting
-    # already exists (i.e. we've run before). Don't suppress notifications
-    # on the very first deploy or after the setting was cleared.
+    # On startup, mark all currently-complete recent windows as already-pushed
+    # so we don't spam home menus right after a redeploy. Only do this if the
+    # setting already exists (so a truly fresh install still works normally).
     try:
-        existing = await sheets.get_setting("last_window_pushed_ts", None)
+        existing = await sheets.get_setting("pushed_window_match_ids", None)
         if existing is not None:
             windows = await sheets.get_kickoff_windows()
-            max_ts = max((w["kickoff_ts"] for w in windows if w["all_done"]), default=0)
-            if max_ts and max_ts > int(existing or 0):
-                await sheets.set_setting("last_window_pushed_ts", str(max_ts))
+            now_ts = int(time.time())
+            keys = []
+            for w in windows:
+                if w["all_done"] and (now_ts - w["kickoff_ts"]) <= 48 * 3600:
+                    wid = ",".join(sorted(str(m) for m in w["match_ids"]))
+                    keys.append(f"w:{wid}")
+            if keys:
+                # Merge with existing
+                prev = set(x for x in str(existing).split(",") if x)
+                prev.update(keys)
+                trimmed = list(prev)[-50:]
+                await sheets.set_setting("pushed_window_match_ids", ",".join(trimmed))
     except Exception:
         pass
     _first_run = True
