@@ -136,7 +136,18 @@ async def check_completed_windows(bot):
 
 
 async def run_scheduler(bot=None):
+    import os, uuid as _uuid
     logger.info("Scheduler started.")
+
+    # Instance lock: prevent two bot instances (e.g. during Railway redeploy overlap)
+    # from both running schedulers and double-pushing notifications.
+    my_instance_id = str(_uuid.uuid4())[:8]
+    await sheets.set_setting("scheduler_instance_id", my_instance_id)
+    await sheets.set_setting("scheduler_heartbeat", str(int(time.time())))
+    logger.info("Scheduler instance %s claimed the lock", my_instance_id)
+    # Give a moment for the setting to propagate, then verify we're still the owner
+    await asyncio.sleep(3)
+
     # Sync missing matches on startup so no match is ever invisible to scheduler
     await _sync_missing_matches()
     # On startup, mark all currently-complete recent windows as already-pushed
@@ -163,6 +174,15 @@ async def run_scheduler(bot=None):
     _first_run = True
     while True:
         try:
+            # Check we still own the scheduler lock — if another (newer) instance
+            # started, it will have overwritten scheduler_instance_id. Step down.
+            current_owner = await sheets.get_setting("scheduler_instance_id", None)
+            if current_owner and current_owner != my_instance_id:
+                logger.info("Scheduler instance %s stepping down — %s took over",
+                            my_instance_id, current_owner)
+                return
+            await sheets.set_setting("scheduler_heartbeat", str(int(time.time())))
+
             await check_due_matches(bot)
             if not _first_run:
                 # Skip notifications on startup to avoid re-sending after redeploy
@@ -597,8 +617,6 @@ async def award_points(match: dict, bot=None):
         recent = kickoff_ts and (now_ts - kickoff_ts) <= 24 * 3600
         if recent:
             await broadcast_result(bot, match)
-            # Also check if this match completed a kickoff window — push fresh home
-            await check_completed_windows(bot)
         else:
             logger.info("Skipping broadcast for match %s — older than 24h", mid)
 
