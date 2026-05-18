@@ -54,6 +54,56 @@ async def main():
     asyncio.create_task(run_scheduler(bot))
 
     logger.info("Start polling")
+
+    # Global error handler: when a callback fails because the message is stale
+    # or deleted, send the user a fresh home menu so they're not stuck.
+    from aiogram.types import ErrorEvent, CallbackQuery
+    from aiogram.exceptions import TelegramBadRequest
+
+    @dp.error()
+    async def on_error(event: ErrorEvent):
+        exc = event.exception
+        upd = event.update
+        try:
+            # Only handle stale-message errors on callback queries
+            if not isinstance(exc, TelegramBadRequest):
+                logger.error("Unhandled error: %s", exc)
+                return
+            msg = str(exc).lower()
+            stale_markers = (
+                "message to edit not found",
+                "message is not modified",
+                "message can't be edited",
+                "query is too old",
+                "message to be replied not found",
+                "message to delete not found",
+            )
+            if not any(m in msg for m in stale_markers):
+                logger.error("TelegramBadRequest: %s", exc)
+                return
+
+            cb: CallbackQuery | None = getattr(upd, "callback_query", None)
+            if not cb or not cb.from_user:
+                return
+            uid = cb.from_user.id
+
+            # Acknowledge the failed callback so the user's UI doesn't hang
+            try:
+                await cb.answer("Refreshing menu...", show_alert=False)
+            except Exception:
+                pass
+
+            # Push a fresh home menu to this user only
+            user = await sheets.get_user(uid)
+            if not user:
+                return
+            lang = user.get("language", "en")
+            from registration import _push_home
+            await _push_home(bot, uid, user, lang)
+            logger.info("Auto-recovered stale callback for user %s", uid)
+        except Exception as e:
+            logger.error("Error handler itself failed: %s", e)
+
     from aiogram.types import InlineQuery, InlineQueryResultArticle, InputTextMessageContent
     import hashlib as _hs
 
