@@ -77,18 +77,22 @@ async def _sync_missing_matches():
 
 async def check_completed_windows(bot):
     """When a kickoff window fully completes, push a fresh home menu to every user.
-    Tracks completed windows by their match_id set, not timestamps — much more
-    reliable than timestamp comparison."""
+    Tracks completed windows by their match_id set, stored as JSON to avoid
+    serialization bugs with comma-separated keys."""
     if not bot:
         return
     try:
+        import json as _json
         windows = await sheets.get_kickoff_windows()
         if not windows:
             return
 
-        # Load the set of match_ids we've already pushed for
+        # Load the set of window keys we've already pushed for
         pushed_raw = await sheets.get_setting("pushed_window_match_ids", "")
-        already_pushed = set(x for x in str(pushed_raw).split(",") if x)
+        try:
+            already_pushed = set(_json.loads(pushed_raw)) if pushed_raw else set()
+        except Exception:
+            already_pushed = set()
 
         now_ts = int(time.time())
         # A window is "newly complete" if: all_done AND kicked off within last 48h
@@ -97,10 +101,9 @@ async def check_completed_windows(bot):
         for w in windows:
             if not w["all_done"]:
                 continue
-            # Only care about recent windows — ignore ancient backfilled matches
             if now_ts - w["kickoff_ts"] > 48 * 3600:
                 continue
-            wid = ",".join(sorted(str(m) for m in w["match_ids"]))
+            wid = "_".join(sorted(str(m) for m in w["match_ids"]))
             window_key = f"w:{wid}"
             if window_key in already_pushed:
                 continue
@@ -124,12 +127,12 @@ async def check_completed_windows(bot):
             except Exception as e:
                 logger.warning("Could not push home to %s: %s", uid, e)
 
-        # Mark these windows as pushed
+        # Mark these windows as pushed (JSON-serialized list)
         for _w, window_key in newly_complete:
             already_pushed.add(window_key)
-        # Keep only recent entries to avoid unbounded growth (last 50)
+        # Keep only most recent 50 entries to avoid unbounded growth
         trimmed = list(already_pushed)[-50:]
-        await sheets.set_setting("pushed_window_match_ids", ",".join(trimmed))
+        await sheets.set_setting("pushed_window_match_ids", _json.dumps(trimmed))
         logger.info("Window-completion home push sent to %d users", pushed)
     except Exception as e:
         logger.error("check_completed_windows error: %s", e)
@@ -151,24 +154,23 @@ async def run_scheduler(bot=None):
     # Sync missing matches on startup so no match is ever invisible to scheduler
     await _sync_missing_matches()
     # On startup, mark all currently-complete recent windows as already-pushed
-    # so we don't spam home menus right after a redeploy. Only do this if the
-    # setting already exists (so a truly fresh install still works normally).
+    # so we don't spam home menus right after a redeploy.
     try:
-        existing = await sheets.get_setting("pushed_window_match_ids", None)
-        if existing is not None:
+        import json as _json
+        existing_raw = await sheets.get_setting("pushed_window_match_ids", None)
+        if existing_raw is not None:
+            try:
+                prev = set(_json.loads(existing_raw)) if existing_raw else set()
+            except Exception:
+                prev = set()
             windows = await sheets.get_kickoff_windows()
             now_ts = int(time.time())
-            keys = []
             for w in windows:
                 if w["all_done"] and (now_ts - w["kickoff_ts"]) <= 48 * 3600:
-                    wid = ",".join(sorted(str(m) for m in w["match_ids"]))
-                    keys.append(f"w:{wid}")
-            if keys:
-                # Merge with existing
-                prev = set(x for x in str(existing).split(",") if x)
-                prev.update(keys)
-                trimmed = list(prev)[-50:]
-                await sheets.set_setting("pushed_window_match_ids", ",".join(trimmed))
+                    wid = "_".join(sorted(str(m) for m in w["match_ids"]))
+                    prev.add(f"w:{wid}")
+            trimmed = list(prev)[-50:]
+            await sheets.set_setting("pushed_window_match_ids", _json.dumps(trimmed))
     except Exception:
         pass
     _first_run = True
