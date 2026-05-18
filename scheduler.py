@@ -87,11 +87,17 @@ async def check_completed_windows(bot):
         if not windows:
             return
 
-        # Load the set of window keys we've already pushed for
-        pushed_raw = await sheets.get_setting("pushed_window_match_ids", "")
-        try:
-            already_pushed = set(_json.loads(pushed_raw)) if pushed_raw else set()
-        except Exception:
+        # Load the set of window keys we've already pushed for.
+        # get_setting auto-decodes JSON, so we get back a list (or empty string default).
+        pushed_raw = await sheets.get_setting("pushed_window_match_ids", [])
+        if isinstance(pushed_raw, list):
+            already_pushed = set(pushed_raw)
+        elif isinstance(pushed_raw, str) and pushed_raw:
+            try:
+                already_pushed = set(_json.loads(pushed_raw))
+            except Exception:
+                already_pushed = set()
+        else:
             already_pushed = set()
 
         now_ts = int(time.time())
@@ -127,12 +133,12 @@ async def check_completed_windows(bot):
             except Exception as e:
                 logger.warning("Could not push home to %s: %s", uid, e)
 
-        # Mark these windows as pushed (JSON-serialized list)
+        # Mark these windows as pushed (set_setting will JSON-encode the list)
         for _w, window_key in newly_complete:
             already_pushed.add(window_key)
         # Keep only most recent 50 entries to avoid unbounded growth
         trimmed = list(already_pushed)[-50:]
-        await sheets.set_setting("pushed_window_match_ids", _json.dumps(trimmed))
+        await sheets.set_setting("pushed_window_match_ids", trimmed)
         logger.info("Window-completion home push sent to %d users", pushed)
     except Exception as e:
         logger.error("check_completed_windows error: %s", e)
@@ -156,12 +162,17 @@ async def run_scheduler(bot=None):
     # On startup, mark all currently-complete recent windows as already-pushed
     # so we don't spam home menus right after a redeploy.
     try:
-        import json as _json
         existing_raw = await sheets.get_setting("pushed_window_match_ids", None)
         if existing_raw is not None:
-            try:
-                prev = set(_json.loads(existing_raw)) if existing_raw else set()
-            except Exception:
+            if isinstance(existing_raw, list):
+                prev = set(existing_raw)
+            elif isinstance(existing_raw, str) and existing_raw:
+                try:
+                    import json as _json
+                    prev = set(_json.loads(existing_raw))
+                except Exception:
+                    prev = set()
+            else:
                 prev = set()
             windows = await sheets.get_kickoff_windows()
             now_ts = int(time.time())
@@ -170,7 +181,7 @@ async def run_scheduler(bot=None):
                     wid = "_".join(sorted(str(m) for m in w["match_ids"]))
                     prev.add(f"w:{wid}")
             trimmed = list(prev)[-50:]
-            await sheets.set_setting("pushed_window_match_ids", _json.dumps(trimmed))
+            await sheets.set_setting("pushed_window_match_ids", trimmed)
     except Exception:
         pass
     _first_run = True
