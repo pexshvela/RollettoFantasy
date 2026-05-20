@@ -248,11 +248,13 @@ async def _home_text(user: dict, lang: str) -> str:
     rnd = await sheets.get_active_round()
     pts = user.get("total_points", 0)
     uid = user.get("telegram_id", 0)
-    # Check confirmation via confirmations table
+    # Check confirmation via confirmations table. A user is "confirmed" only when
+    # they explicitly tapped "Confirm Squad" (confirmed_at is set).
+    # An auto-save row from a transfer/swap with confirmed_at=NULL doesn't count.
     confirmed = False
     try:
         conf = await sheets.get_latest_confirmation(int(uid))
-        if conf:
+        if conf and conf.get("confirmed_at"):
             confirmed = True
     except Exception:
         pass
