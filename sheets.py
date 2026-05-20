@@ -208,15 +208,45 @@ async def get_all_squads() -> list[dict]:
 
 # ── Confirmations ─────────────────────────────────────────────────────────────
 
-async def confirm_squad(telegram_id: int, gameweek_id: int, squad_snapshot: dict):
+async def confirm_squad(telegram_id: int, gameweek_id: int, squad_snapshot: dict,
+                         intentional: bool = False):
+    """Save/update a user's confirmation.
+
+    `intentional=True` → user explicitly tapped "Confirm Squad" button.
+       This is the only path that sets confirmed_at for first-time users.
+    `intentional=False` → auto-save from transfer/sub-swap.
+       Updates squad_snapshot but does NOT set confirmed_at on first-time users
+       (otherwise a transfer would be retroactively treated as "joining now").
+
+    confirmed_at is set ONLY on the first intentional confirmation and never
+    overwritten on subsequent updates. This preserves the original commitment
+    timestamp so the scheduler's carry-forward filter
+    (confirmed_at <= match kickoff) works correctly."""
     try:
-        _get_sb().table("confirmations").upsert({
+        # Check if a confirmation row already exists for this user
+        existing = _get_sb().table("confirmations").select("confirmed_at").eq(
+            "telegram_id", telegram_id
+        ).execute()
+        row_exists = bool(existing.data)
+        has_confirmed_at = row_exists and existing.data[0].get("confirmed_at")
+
+        row = {
             "telegram_id":     telegram_id,
             "gameweek_id":     gameweek_id,
-            "confirmed_at":    datetime.now(timezone.utc).isoformat(),
             "squad_snapshot":  json.dumps(squad_snapshot),
-        }).execute()
-        # confirmed column removed — confirmation tracked via confirmations table
+        }
+        if has_confirmed_at:
+            # Preserve original confirmed_at — never overwritten
+            row["confirmed_at"] = existing.data[0]["confirmed_at"]
+        elif intentional:
+            # First intentional confirmation — stamp it now
+            row["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            # Auto-save (transfer/sub swap) for a user who never intentionally
+            # confirmed yet. Save the squad but leave confirmed_at NULL — they
+            # haven't actually committed their participation yet.
+            row["confirmed_at"] = None
+        _get_sb().table("confirmations").upsert(row).execute()
     except Exception as e:
         logger.error("confirm_squad error: %s", e)
 
