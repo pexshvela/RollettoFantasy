@@ -222,10 +222,10 @@ async def show_squad(callback: CallbackQuery, state: FSMContext):
     squad     = await sheets.get_squad(uid)
     formation = (user or {}).get("formation", "4-3-3")
     captain   = (user or {}).get("captain", "")
-    # Check confirmation - use latest confirmation across all gameweeks
+    # Check confirmation - only count rows with confirmed_at set (intentional confirm)
     confirmed = False
     conf = await sheets.get_latest_confirmation(uid)
-    if conf:
+    if conf and conf.get("confirmed_at"):
         confirmed = True
 
     if squad and _is_complete(squad, formation):
@@ -615,7 +615,7 @@ async def confirm_squad(callback: CallbackQuery, state: FSMContext):
     snapshot = dict(squad)
     snapshot["captain"] = captain
     snapshot["formation"] = formation
-    await sheets.confirm_squad(uid, gw["id"], snapshot)
+    await sheets.confirm_squad(uid, gw["id"], snapshot, intentional=True)
     import config as _config
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 " + t(lang, "btn_squad"), callback_data="home:squad")
