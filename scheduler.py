@@ -476,10 +476,23 @@ async def award_points(match: dict, bot=None):
     ).execute()
     gw_confs = {int(r["telegram_id"]): _parse_snap(r) for r in (gw_confs_res.data or [])}
 
-    # Fetch ALL confirmations per user (for carry-forward logic in one query)
-    # We need to find the latest confirmation at or before each match's gameweek
+    # Determine the match's kickoff datetime — used for time-based carry-forward
+    # comparison (more reliable than gameweek_id ordering).
+    match_kickoff_ts = int(match.get("kickoff_timestamp") or 0)
+    from datetime import datetime as _dt, timezone as _tz
+    if match_kickoff_ts:
+        match_kickoff_dt = _dt.fromtimestamp(match_kickoff_ts, tz=_tz.utc)
+    else:
+        # Fallback to parsing match_date string
+        try:
+            match_kickoff_dt = _dt.fromisoformat(match_date + "T23:59:59+00:00")
+        except Exception:
+            match_kickoff_dt = _dt.now(_tz.utc)
+
+    # Fetch ALL confirmations per user (for time-based carry-forward in one query).
+    # Order by confirmed_at DESC so the newest comes first per user.
     all_confs_res = sheets._get_sb().table("confirmations").select("*").order(
-        "gameweek_id", desc=True
+        "confirmed_at", desc=True
     ).execute()
     user_confs_history: dict[int, list[dict]] = {}
     for r in (all_confs_res.data or []):
@@ -493,13 +506,29 @@ async def award_points(match: dict, bot=None):
 
         confirmation = gw_confs.get(uid)
         if not confirmation:
-            # Carry forward (READ-ONLY): find latest confirmation AT OR BEFORE this
-            # gameweek_id. Do NOT write back to DB — that would corrupt history
-            # by creating fake confirmation rows for gameweeks the user never confirmed.
+            # Carry forward (READ-ONLY) using timestamps:
+            # find latest confirmation made AT OR BEFORE the match kickoff.
+            # This way users who joined later don't retroactively earn points
+            # for matches that kicked off before they confirmed.
             history = user_confs_history.get(uid, [])
             for c in history:
-                if int(c.get("gameweek_id") or 0) <= gw_id:
-                    # Use it directly (in-memory only)
+                conf_at = c.get("confirmed_at")
+                if not conf_at:
+                    continue
+                # Parse confirmed_at (Supabase returns ISO 8601 string)
+                try:
+                    if isinstance(conf_at, str):
+                        # Handle Supabase format with or without microseconds
+                        conf_at_clean = conf_at.replace("Z", "+00:00")
+                        conf_dt = _dt.fromisoformat(conf_at_clean)
+                    else:
+                        conf_dt = conf_at
+                    if conf_dt.tzinfo is None:
+                        conf_dt = conf_dt.replace(tzinfo=_tz.utc)
+                except Exception:
+                    continue
+                if conf_dt <= match_kickoff_dt:
+                    # This confirmation existed before the match — use it
                     snap = c.get("squad_snapshot") or {}
                     if isinstance(snap, str):
                         try: snap = _json.loads(snap)
@@ -508,7 +537,7 @@ async def award_points(match: dict, bot=None):
                     confirmation["squad_snapshot"] = snap
                     break
         if not confirmation:
-            continue  # Never confirmed before this match — no points → 0 points
+            continue  # User had no confirmation at the time of this match — 0 points → 0 points
 
         squad_snapshot = confirmation.get("squad_snapshot") or {}
         # Supabase sometimes returns squad_snapshot as a JSON string — parse it
