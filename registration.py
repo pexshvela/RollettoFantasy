@@ -241,6 +241,7 @@ _last_home_msg: dict[int, int] = {}
 _TOURNAMENT_NAMES = {
     "pl":  "Premier League",
     "ucl": "UEFA Champions League",
+    "wc":  "FIFA World Cup",
 }
 
 async def _home_text(user: dict, lang: str) -> str:
