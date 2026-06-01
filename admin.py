@@ -38,6 +38,9 @@ COMMANDS_TEXT = """📖 <b>ADMIN COMMANDS</b>
 /settournament pl
 <i>Switch to Premier League player list and fixtures</i>
 
+/settournament wc
+<i>Switch to FIFA World Cup player list and fixtures</i>
+
 ━━━━━━━━━━━━━━━━━
 📅 <b>FIXTURES & GAMEWEEKS</b>
 ━━━━━━━━━━━━━━━━━
@@ -238,12 +241,12 @@ async def cmd_settournament(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     parts = message.text.strip().split()
-    if len(parts) < 2 or parts[1] not in ("ucl", "pl"):
-        await message.answer("Usage: /settournament ucl | pl")
+    if len(parts) < 2 or parts[1] not in ("ucl", "pl", "wc"):
+        await message.answer("Usage: /settournament ucl | pl | wc")
         return
     t_name = parts[1]
 
-    NAMES = {"pl": "Premier League", "ucl": "UEFA Champions League"}
+    NAMES = {"pl": "Premier League", "ucl": "UEFA Champions League", "wc": "FIFA World Cup"}
     await message.answer(
         f"🔄 Switching to <b>{NAMES.get(t_name, t_name.upper())}</b>...\n"
         f"Resetting all squads and points.",
