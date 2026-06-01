@@ -161,8 +161,14 @@ async def _show_player_list(message, lang: str, squad: dict, slot: str,
 
     picked_ids = {v for k, v in squad.items() if isinstance(v, str) and v and k != slot}
 
+    # Hide players from eliminated teams (World Cup only; empty set otherwise)
+    eliminated = await sheets.get_eliminated_teams()
+
     # Show all players — unaffordable ones marked with 🚫
-    available = [p for p in get_players_by_position(pos) if p["id"] not in picked_ids]
+    available = [
+        p for p in get_players_by_position(pos)
+        if p["id"] not in picked_ids and p.get("team") not in eliminated
+    ]
     available.sort(key=lambda p: -p["price"])
 
     page_size = 8
@@ -368,8 +374,9 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Max players per club rule
+    # Max players per club/nation rule (dynamic for World Cup by matchday)
     NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
+    max_per = await sheets.get_max_per_nation()
     same_club_count = 0
     for k, other_pid in squad.items():
         if k in NON_PLAYER_KEYS or k == slot:
@@ -379,9 +386,9 @@ async def pick_player(callback: CallbackQuery, state: FSMContext):
         other_p = get_player(other_pid)
         if other_p and other_p.get("team") == p.get("team"):
             same_club_count += 1
-    if same_club_count >= config.MAX_PLAYERS_PER_CLUB:
+    if same_club_count >= max_per:
         await callback.answer(
-            f"❌ Max {config.MAX_PLAYERS_PER_CLUB} players per club! "
+            f"❌ Max {max_per} players per club! "
             f"You already have {same_club_count} from {p.get('team')}.",
             show_alert=True
         )
@@ -500,11 +507,12 @@ async def search_player_results(message, state: FSMContext):
 
     picked_ids = {v for k, v in squad.items() if isinstance(v, str) and v and k != slot}
 
-    # Search all players of this position
+    # Search all players of this position (hide eliminated WC teams)
+    eliminated = await sheets.get_eliminated_teams()
     results = [
         p for p in get_players_by_position(pos)
         if query in p["name"].lower() or query in p["team"].lower()
-        if p["id"] not in picked_ids
+        if p["id"] not in picked_ids and p.get("team") not in eliminated
     ]
     results.sort(key=lambda p: -p["price"])
 
