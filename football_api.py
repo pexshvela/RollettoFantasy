@@ -337,3 +337,27 @@ def round_display_name(round_str: str) -> str:
         return f"Round {num}"
     # Knockout round — use as-is, just clean up
     return round_str.replace("-", " ").title().replace("  ", " ").strip()
+
+
+def wc_matchday(round_str: str) -> int | None:
+    """Map a World Cup round string to a matchday number 1-7.
+    Group Stage - 1/2/3 -> 1/2/3
+    Round of 16 -> 4, Quarter-finals -> 5, Semi-finals -> 6,
+    Final / 3rd Place -> 7. Returns None if unrecognized."""
+    if not round_str:
+        return None
+    s = round_str.lower().strip()
+    if "group" in s:
+        num = parse_round_number(round_str)
+        if num in (1, 2, 3):
+            return num
+        return 1
+    if "16" in s:                      # Round of 16
+        return 4
+    if "quarter" in s:                 # Quarter-finals
+        return 5
+    if "semi" in s:                    # Semi-finals
+        return 6
+    if "final" in s or "3rd" in s or "third" in s:  # Final / 3rd-place
+        return 7
+    return None
