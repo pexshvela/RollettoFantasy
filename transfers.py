@@ -63,14 +63,15 @@ async def show_transfers(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    ts = await sheets.get_transfer_settings()
-    free_n = ts.get("free", config.FREE_TRANSFERS_DEFAULT)
+    rules = await sheets.get_transfer_rules()
+    free_n = rules["free"]
+    extra_cost = rules["extra_cost"]
 
     gw = await sheets.get_active_gameweek()
     gw_id = gw["id"] if gw else 0
     used = await sheets.count_transfers_this_gw(uid, gw_id) if gw_id else 0
     remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
-    cost_next = 0 if remaining_free > 0 or free_n == 0 else config.EXTRA_TRANSFER_COST
+    cost_next = 0 if remaining_free > 0 or free_n == 0 else extra_cost
 
     ts_settings = await sheets.get_transfer_settings()
     close_time  = (ts_settings.get("close") or "")[:16]
@@ -107,9 +108,12 @@ async def pick_player_out(callback: CallbackQuery, state: FSMContext):
     budget_used = calc_squad_cost(data["squad"])
     budget_free = config.TOTAL_BUDGET - budget_used + (p_out["price"] if p_out else 0)
 
+    # Hide players from eliminated teams (World Cup only; empty set otherwise)
+    eliminated = await sheets.get_eliminated_teams()
     available = [
         p for p in get_players_by_position(pos)
         if p["price"] <= budget_free and p["id"] not in data["squad"].values()
+        and p.get("team") not in eliminated
     ]
 
     kb = InlineKeyboardBuilder()
@@ -152,9 +156,10 @@ async def pick_player_in(callback: CallbackQuery, state: FSMContext):
     p_out = get_player(pid_out)
     p_in  = get_player(pid_in)
 
-    # Max players per club rule (excluding the player being transferred out)
+    # Max players per club/nation rule (dynamic for World Cup by matchday)
     squad_current = data.get("squad") or await sheets.get_squad(uid) or {}
     NON_PLAYER_KEYS = {"formation", "telegram_id", "captain"}
+    max_per = await sheets.get_max_per_nation()
     same_club_count = 0
     for k, other_pid in squad_current.items():
         if k in NON_PLAYER_KEYS:
@@ -166,17 +171,18 @@ async def pick_player_in(callback: CallbackQuery, state: FSMContext):
         other_p = get_player(other_pid)
         if other_p and p_in and other_p.get("team") == p_in.get("team"):
             same_club_count += 1
-    if p_in and same_club_count >= config.MAX_PLAYERS_PER_CLUB:
+    if p_in and same_club_count >= max_per:
         await callback.answer(
-            f"❌ Max {config.MAX_PLAYERS_PER_CLUB} players per club! "
+            f"❌ Max {max_per} players per club! "
             f"You already have {same_club_count} from {p_in.get('team')}.",
             show_alert=True
         )
         return
 
     # Calculate cost
+    rules = await sheets.get_transfer_rules()
     remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
-    cost = 0 if remaining_free > 0 or free_n == 0 else config.EXTRA_TRANSFER_COST
+    cost = 0 if remaining_free > 0 or free_n == 0 else rules["extra_cost"]
 
     name_out = p_out["name"] if p_out else pid_out
     name_in  = p_in["name"]  if p_in  else pid_in
