@@ -22,6 +22,10 @@ import time as _time
 _cache: dict = {}
 _CACHE_TTL = 60  # seconds
 
+# Cache for World Cup eliminated-teams detection (refreshed every 10 min)
+_ELIM_CACHE = None
+_ELIM_CACHE_TS = 0.0
+
 def _cache_get(key: str):
     entry = _cache.get(key)
     if entry and _time.time() - entry["ts"] < _CACHE_TTL:
@@ -766,6 +770,121 @@ async def set_setting(key: str, value):
 
 async def get_tournament() -> str:
     return await get_setting("active_tournament", config.DEFAULT_TOURNAMENT)
+
+
+async def get_wc_matchday() -> int | None:
+    """Current World Cup matchday (1-7) based on the active round.
+    Returns None if not in WC or round can't be determined."""
+    try:
+        import football_api as _fapi
+        rnd = await get_active_round()
+        if not rnd:
+            return None
+        round_str = rnd.get("round_str") or rnd.get("name") or ""
+        return _fapi.wc_matchday(round_str)
+    except Exception:
+        return None
+
+
+async def get_max_per_nation() -> int:
+    """Max players allowed per club/nation for the active tournament.
+    PL/UCL: fixed MAX_PLAYERS_PER_CLUB. WC: scales by matchday
+    (group=3, R16=4, QF=5, SF=6, Final=8)."""
+    try:
+        tournament = await get_tournament()
+        if tournament == "wc":
+            md = await get_wc_matchday()
+            if md and md in config.WC_MAX_PER_NATION:
+                return config.WC_MAX_PER_NATION[md]
+            return 3  # default to group-stage cap
+        return config.MAX_PLAYERS_PER_CLUB
+    except Exception:
+        return config.MAX_PLAYERS_PER_CLUB
+
+
+async def get_transfer_rules() -> dict:
+    """Tournament-aware transfer rules.
+    Returns {free: int, extra_cost: int} where free=0 means unlimited.
+    PL/UCL: from settings + config.EXTRA_TRANSFER_COST.
+    WC: per-matchday allowance map + WC_EXTRA_TRANSFER_COST (-3)."""
+    try:
+        tournament = await get_tournament()
+        if tournament == "wc":
+            md = await get_wc_matchday()
+            allowance = config.WC_TRANSFER_ALLOWANCE.get(md, 1) if md else 1
+            # -1 means unlimited → represent as 0 (the codebase treats 0 as unlimited)
+            free = 0 if allowance == -1 else allowance
+            return {"free": free, "extra_cost": config.WC_EXTRA_TRANSFER_COST}
+        # PL/UCL: use existing setting
+        ts = await get_transfer_settings()
+        free = ts.get("free", config.FREE_TRANSFERS_DEFAULT)
+        return {"free": free, "extra_cost": config.EXTRA_TRANSFER_COST}
+    except Exception:
+        return {"free": config.FREE_TRANSFERS_DEFAULT, "extra_cost": config.EXTRA_TRANSFER_COST}
+
+
+async def get_eliminated_teams() -> set:
+    """Return set of team names eliminated from the World Cup.
+    A team is 'eliminated' once it has no remaining upcoming/future fixtures.
+    Only meaningful for WC; returns empty set for other tournaments.
+
+    Detection: look at match_cache for the active tournament. A team that has
+    played at least one match but has NO match with kickoff in the future
+    (status not finished) is considered eliminated. Cached for 10 min to avoid
+    hammering the DB on every picker render."""
+    try:
+        tournament = await get_tournament()
+        if tournament != "wc":
+            return set()
+
+        # Simple in-process cache (10 min)
+        import time as _time
+        global _ELIM_CACHE, _ELIM_CACHE_TS
+        now = _time.time()
+        if _ELIM_CACHE is not None and (now - _ELIM_CACHE_TS) < 600:
+            return _ELIM_CACHE
+
+        sb = _get_sb()
+        res = sb.table("match_cache").select(
+            "home_team,away_team,kickoff_timestamp,status,round"
+        ).execute()
+        rows = res.data or []
+        if not rows:
+            _ELIM_CACHE, _ELIM_CACHE_TS = set(), now
+            return set()
+
+        FINISHED = {"final", "ft", "match finished", "aet", "pen", "finished"}
+        now_ts = int(now)
+        teams_played = set()
+        teams_with_future = set()
+        for m in rows:
+            home = (m.get("home_team") or "").strip()
+            away = (m.get("away_team") or "").strip()
+            ts = int(m.get("kickoff_timestamp") or 0)
+            status = (m.get("status") or "").lower()
+            is_finished = status in FINISHED
+            for tm in (home, away):
+                if not tm:
+                    continue
+                if is_finished or ts <= now_ts:
+                    teams_played.add(tm)
+                # A team has a "future" presence if there's a match not yet finished
+                if (not is_finished) and ts > now_ts:
+                    teams_with_future.add(tm)
+
+        # Eliminated = played at least one match, but has no future fixtures.
+        # Guard: if NO team has future fixtures (e.g. between rounds before the
+        # next round is scheduled), don't mark everyone eliminated.
+        if not teams_with_future:
+            _ELIM_CACHE, _ELIM_CACHE_TS = set(), now
+            return set()
+
+        eliminated = teams_played - teams_with_future
+        _ELIM_CACHE, _ELIM_CACHE_TS = eliminated, now
+        return eliminated
+    except Exception as e:
+        logger.warning("get_eliminated_teams error: %s", e)
+        return set()
 
 
 async def get_transfer_settings() -> dict:
