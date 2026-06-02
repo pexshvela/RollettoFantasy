@@ -324,10 +324,12 @@ async def show_rules(callback: CallbackQuery, state: FSMContext):
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = (user or {}).get("language", "en")
+    tournament = await sheets.get_tournament()
+    rules_key = "rules_text_wc" if tournament == "wc" else "rules_text"
     kb   = InlineKeyboardBuilder()
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     await callback.message.edit_text(
-        t(lang, "rules_title") + "\n" + t(lang, "rules_text"),
+        t(lang, "rules_title") + "\n" + t(lang, rules_key),
         parse_mode="HTML",
         reply_markup=kb.as_markup()
     )
