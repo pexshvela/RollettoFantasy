@@ -69,7 +69,9 @@ async def show_transfers(callback: CallbackQuery, state: FSMContext):
 
     gw = await sheets.get_active_gameweek()
     gw_id = gw["id"] if gw else 0
-    used = await sheets.count_transfers_this_gw(uid, gw_id) if gw_id else 0
+    # Count transfers against the current window/matchday (not per calendar-date
+    # gameweek) so the free allowance doesn't reset mid-round.
+    used = await sheets.count_transfers_used(uid, gw_id)
     remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
     cost_next = 0 if remaining_free > 0 or free_n == 0 else extra_cost
 
@@ -223,6 +225,7 @@ async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
     cost     = data.get("cost", 0)
 
     # Update squad
+    captain_reassigned = False
     squad = await sheets.get_squad(uid)
     if squad:
         squad[slot_out] = pid_in
@@ -230,6 +233,13 @@ async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
         # Auto-confirm with new squad for current active GW
         captain   = (user or {}).get("captain", "")
         formation = (user or {}).get("formation", "4-3-3")
+        # If the player being transferred out was the captain, the captaincy
+        # would otherwise dangle on a player no longer in the squad (no ×2 for
+        # anyone). Move the armband to the incoming replacement instead.
+        if captain and captain == pid_out:
+            captain = pid_in
+            captain_reassigned = True
+            await sheets.update_user(uid, captain=pid_in)
         snapshot = dict(squad)
         snapshot["captain"]   = captain
         snapshot["formation"] = formation
@@ -260,8 +270,11 @@ async def confirm_transfer(callback: CallbackQuery, state: FSMContext):
     kb.button(text="📋 " + t(lang, "btn_squad"), callback_data="home:squad")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
     kb.adjust(1)
+    done_text = t(lang, "transfer_done", **{"out": name_out, "in": name_in})
+    if captain_reassigned:
+        done_text += "\n\n" + t(lang, "captain_moved", name=name_in)
     await callback.message.edit_text(
-        t(lang, "transfer_done", **{"out": name_out, "in": name_in}),
+        done_text,
         parse_mode="HTML",
         reply_markup=kb.as_markup()
     )

@@ -325,20 +325,24 @@ async def show_round_lb(callback: CallbackQuery, state: FSMContext):
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
 
-    # Get the round display name & associated gameweek_id
+    # Get the round display name & the raw round string used in match_cache
     rnd = await sheets.get_active_round()
     display = rnd.get("name") if rnd else round_key
 
-    # Map to internal gameweek_id (just a grouping key in DB)
-    gws = await sheets.get_all_gameweeks()
-    if round_key.isdigit():
-        gw = next((g for g in gws if str(round_key) in str(g.get("name", ""))), None)
-        gw_id = gw["id"] if gw else int(round_key)
-    else:
-        # Named round - use most recent gameweek as proxy
-        gw_id = gws[-1]["id"] if gws else 1
-
-    rows = await sheets.get_gameweek_leaderboard(gw_id, 20)
+    # Aggregate points directly from the matches that belong to this round.
+    # This is reliable regardless of how gameweek_ids were assigned.
+    round_str = (rnd or {}).get("round_str") if rnd else None
+    rows = await sheets.get_round_leaderboard(round_str, 20) if round_str else []
+    if not rows:
+        # Fallback to gameweek-based aggregation if the round string is unknown
+        # or no matches are cached for it yet.
+        gws = await sheets.get_all_gameweeks()
+        if round_key.isdigit():
+            gw = next((g for g in gws if str(g.get("name", "")) == f"Gameweek {round_key}"), None)
+            gw_id = gw["id"] if gw else int(round_key)
+        else:
+            gw_id = gws[-1]["id"] if gws else 1
+        rows = await sheets.get_gameweek_leaderboard(gw_id, 20)
 
     lines = [t(lang, "lb_gameweek", n=display), ""]
     my_in_list = False

@@ -4,7 +4,8 @@ config.py — All environment variables and constants.
 import os
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN", "")
-ADMIN_ID    = int(os.getenv("ADMIN_ID", "5194165418"))
+# No hardcoded default — must be supplied via env. 0 means "no admin configured".
+ADMIN_ID    = int(os.getenv("ADMIN_ID", "0") or "0")
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -18,7 +19,8 @@ SHEET_2_USERNAME_COL = os.getenv("SHEET_2_USERNAME_COL", "rolletto_username")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "{}")
 
 # api-football (api-sports.io direct)
-API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "e23260ce6329642ba416e6e185140894")
+# No hardcoded default — supply via env. (Any previously committed key should be rotated.)
+API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 
 # Fantasy settings

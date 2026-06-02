@@ -352,8 +352,16 @@ async def award_points(match: dict, bot=None):
         n = _norm(team_name)
         hn = _norm(home_team)
         an = _norm(away_team)
-        if n == hn or n in hn or hn in n: return "home"
-        if n == an or n in an or an in n: return "away"
+        # Exact match wins outright.
+        if n == hn: return "home"
+        if n == an: return "away"
+        # Substring fallback (handles "Man United" vs "Manchester United"), but
+        # only when it matches exactly ONE side — otherwise it's ambiguous and we
+        # refuse rather than mis-assign a clean sheet / goals-conceded.
+        home_sub = bool(n) and (n in hn or hn in n)
+        away_sub = bool(n) and (n in an or an in n)
+        if home_sub and not away_sub: return "home"
+        if away_sub and not home_sub: return "away"
         return ""
 
     # Map API players → our player IDs
@@ -642,9 +650,17 @@ async def award_points(match: dict, bot=None):
         for r in (all_pts_res.data or []):
             u = int(r["telegram_id"])
             uid_totals[u] = uid_totals.get(u, 0) + int(r.get("points") or 0)
+        # Subtract accumulated transfer point-hits so extra-transfer penalties
+        # persist (total_points is recomputed from scratch here, so without this
+        # the −4/−3 hits applied at transfer time would be silently wiped).
+        transfer_costs = await sheets.get_transfer_costs_by_user(
+            list(user_totals_batch.keys())
+        )
         # Update all users in parallel
         await asyncio.gather(*[
-            sheets.update_user(u, total_points=uid_totals.get(u, 0))
+            sheets.update_user(
+                u, total_points=uid_totals.get(u, 0) - transfer_costs.get(u, 0)
+            )
             for u in user_totals_batch.keys()
         ])
 

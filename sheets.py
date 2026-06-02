@@ -326,6 +326,61 @@ async def count_transfers_this_gw(telegram_id: int, gameweek_id: int) -> int:
         return 0
 
 
+async def count_transfers_since(telegram_id: int, since_iso: str) -> int:
+    """Count transfers a user made at/after a timestamp (transfer-window open).
+    Used so 'free transfers per window' resets cleanly even when gameweeks are
+    created per calendar date."""
+    if not since_iso:
+        return 0
+    try:
+        res = _get_sb().table("transfers").select("id").eq(
+            "telegram_id", telegram_id
+        ).gte("created_at", since_iso).execute()
+        return len(res.data or [])
+    except Exception as e:
+        logger.error("count_transfers_since error: %s", e)
+        return 0
+
+
+async def count_transfers_used(telegram_id: int, gameweek_id: int) -> int:
+    """How many transfers count against the user's free allowance right now.
+
+    WC: per-matchday gameweek is the natural reset boundary → count per gameweek.
+    PL/UCL: gameweeks are per calendar date, so counting per gameweek would reset
+    the allowance mid-round. Instead count transfers since the current transfer
+    window opened (admin-controlled). Falls back to per-gameweek if no window."""
+    try:
+        tournament = await get_tournament()
+        if tournament == "wc":
+            return await count_transfers_this_gw(telegram_id, gameweek_id)
+        ts = await get_transfer_settings()
+        open_iso = ts.get("open")
+        if open_iso:
+            return await count_transfers_since(telegram_id, open_iso)
+        return await count_transfers_this_gw(telegram_id, gameweek_id)
+    except Exception:
+        return await count_transfers_this_gw(telegram_id, gameweek_id)
+
+
+async def get_transfer_costs_by_user(telegram_ids: list) -> dict[int, int]:
+    """Return {telegram_id: total point cost of all their transfers}.
+    Used by the scoring recompute so extra-transfer hits persist in total_points."""
+    if not telegram_ids:
+        return {}
+    try:
+        res = _get_sb().table("transfers").select(
+            "telegram_id,cost_pts"
+        ).in_("telegram_id", [str(u) for u in telegram_ids]).execute()
+        costs: dict[int, int] = {}
+        for r in (res.data or []):
+            uid = int(r["telegram_id"])
+            costs[uid] = costs.get(uid, 0) + int(r.get("cost_pts") or 0)
+        return costs
+    except Exception as e:
+        logger.error("get_transfer_costs_by_user error: %s", e)
+        return {}
+
+
 # ── Gameweeks ─────────────────────────────────────────────────────────────────
 
 async def get_active_gameweek() -> Optional[dict]:
@@ -696,6 +751,46 @@ async def get_overall_leaderboard(limit: int = 20) -> list[dict]:
         return []
 
 
+async def get_round_leaderboard(round_str: str, limit: int = 20) -> list[dict]:
+    """Leaderboard for a specific round, computed from the matches that actually
+    belong to that round (match_cache.round == round_str). This avoids the fragile
+    round→gameweek_id name-substring mapping, which breaks when gameweeks are
+    created per calendar date rather than per round."""
+    try:
+        sb = _get_sb()
+        if not round_str:
+            return []
+        mc = sb.table("match_cache").select("match_id").eq("round", round_str).execute()
+        match_ids = [str(r["match_id"]) for r in (mc.data or []) if r.get("match_id") is not None]
+        if not match_ids:
+            return []
+
+        pts_res = sb.table("player_match_points").select(
+            "telegram_id,points"
+        ).in_("match_id", match_ids).execute()
+        totals: dict[int, int] = {}
+        for r in (pts_res.data or []):
+            uid = int(r["telegram_id"])
+            totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
+
+        users_res = sb.table("users").select(
+            "telegram_id,rolletto_username,tg_username,username"
+        ).execute()
+        result = []
+        for u in (users_res.data or []):
+            uid = int(u["telegram_id"])
+            result.append({
+                "telegram_id": uid,
+                "username": u.get("rolletto_username") or u.get("tg_username") or u.get("username") or "?",
+                "total_points": totals.get(uid, 0),
+            })
+        result.sort(key=lambda x: -x["total_points"])
+        return result[:limit]
+    except Exception as e:
+        logger.error("get_round_leaderboard error: %s", e)
+        return []
+
+
 async def get_gameweek_leaderboard(gameweek_id: int, limit: int = 20) -> list[dict]:
     try:
         # Get all points for this gameweek
@@ -991,7 +1086,10 @@ async def is_swap_window_open() -> bool:
         return True  # no active locked window
     except Exception as e:
         logger.error("is_swap_window_open error: %s", e)
-        return True  # fail-open
+        # Fail CLOSED: if we can't verify the window is open, don't allow swaps.
+        # Better to briefly block a legit swap than to permit one during a
+        # locked kickoff window and corrupt scoring fairness.
+        return False
 
 
 async def get_next_window_status() -> dict | None:
