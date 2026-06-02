@@ -870,17 +870,65 @@ async def check_admin_reminders(bot=None):
 
 
 async def auto_create_gameweeks(matches: list):
-    """Group matches by date and create gameweeks automatically."""
+    """Group matches and create gameweeks automatically.
+    PL/UCL: one gameweek per calendar date.
+    WC: one gameweek per matchday (Group Stage 1/2/3, R16, QF, SF, Final),
+    so the 7 transfer/nation-cap rules line up with gameweek numbers."""
     from collections import defaultdict
+    import football_api as _fapi
+
+    tournament = await sheets.get_tournament()
+    existing_gws = await sheets.get_all_gameweeks()
+
+    if tournament == "wc":
+        # Group by matchday number (1-7) derived from the round string.
+        by_md = defaultdict(list)
+        for m in matches:
+            md = _fapi.wc_matchday(m.get("round", ""))
+            if md is None:
+                continue
+            by_md[md].append(m)
+
+        # Which matchdays already have a gameweek? (match by name "Gameweek N")
+        existing_names = {gw.get("name") for gw in existing_gws}
+
+        MD_LABEL = {1: "Group Stage 1", 2: "Group Stage 2", 3: "Group Stage 3",
+                    4: "Round of 16", 5: "Quarter-finals", 6: "Semi-finals",
+                    7: "Final"}
+
+        for md in sorted(by_md.keys()):
+            gw_name = f"Gameweek {md}"
+            if gw_name in existing_names:
+                continue
+            md_matches = sorted(by_md[md], key=lambda x: x.get("kickoff_timestamp", 0))
+            first_kickoff = md_matches[0].get("kickoff_timestamp", 0)
+            last_kickoff  = md_matches[-1].get("kickoff_timestamp", 0)
+            start_date = datetime.fromtimestamp(first_kickoff, tz=timezone.utc).strftime("%Y-%m-%d") if first_kickoff else ""
+            end_date   = datetime.fromtimestamp(last_kickoff,  tz=timezone.utc).strftime("%Y-%m-%d") if last_kickoff else start_date
+            if first_kickoff:
+                dl = datetime.fromtimestamp(first_kickoff, tz=timezone.utc) - timedelta(hours=1)
+                deadline = dl.isoformat()
+            else:
+                deadline = f"{start_date}T18:00:00+00:00"
+
+            await sheets.create_gameweek(
+                name          = gw_name,
+                tournament_id = 0,
+                start_date    = start_date,
+                end_date      = end_date,
+                deadline      = deadline,
+            )
+            logger.info("Created %s (MD%d, %s) %s..%s", gw_name, md, MD_LABEL.get(md, ""), start_date, end_date)
+        return
+
+    # ── PL/UCL: one gameweek per calendar date (unchanged) ──
     by_date = defaultdict(list)
     for m in matches:
         by_date[m["date"]].append(m)
 
-    existing_gws = await sheets.get_all_gameweeks()
     existing_dates = {gw.get("start_date") for gw in existing_gws}
 
     gw_num = len(existing_gws) + 1
-    tournament = await sheets.get_tournament()
 
     for date_str in sorted(by_date.keys()):
         if date_str in existing_dates:
