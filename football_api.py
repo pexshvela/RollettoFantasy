@@ -329,14 +329,31 @@ def parse_round_number(round_str: str) -> int | None:
 def round_display_name(round_str: str) -> str:
     """Return a clean display name for any round string.
     'Regular Season - 35' -> 'Round 35'
+    'Group Stage - 1' -> 'Group Stage – Matchday 1'
     'Semi-finals' -> 'Semi-finals'
     'Quarter-finals' -> 'Quarter-finals'
     """
+    s = (round_str or "").lower()
+    if "group" in s:
+        num = parse_round_number(round_str)
+        if num is not None:
+            return f"Group Stage – Matchday {num}"
+        return "Group Stage"
     num = parse_round_number(round_str)
     if num is not None:
         return f"Round {num}"
-    # Knockout round — use as-is, just clean up
-    return round_str.replace("-", " ").title().replace("  ", " ").strip()
+    # Knockout round — keep canonical names, don't mangle with .title()
+    KNOCKOUT = {
+        "round of 16": "Round of 16",
+        "quarter-finals": "Quarter-finals",
+        "semi-finals": "Semi-finals",
+        "final": "Final",
+        "3rd place final": "3rd Place Final",
+        "third place final": "3rd Place Final",
+    }
+    if s.strip() in KNOCKOUT:
+        return KNOCKOUT[s.strip()]
+    return round_str.strip()
 
 
 def wc_matchday(round_str: str) -> int | None:
