@@ -156,6 +156,119 @@ STRINGS = {
 ▸ Usernames are partially hidden for privacy
 """,
 
+        "rules_text_wc": """
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>HOW TO PLAY</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Squad</b>
+▸ Pick 15 players: 2 GK, 5 DEF, 5 MF, 3 FW
+▸ Budget: $100m
+▸ <b>Max players from one nation:</b>
+   • Group stage: 3
+   • Round of 16: 4
+   • Quarter-finals: 5
+   • Semi-finals: 6
+   • Final: 8
+▸ Choose a formation for your starting 11
+▸ Bench: 4 substitutes (1 GK + 3 outfield)
+
+<b>Captain</b>
+▸ Must pick a captain before confirming
+▸ Captain scores ×2 points
+▸ No captain = cannot confirm
+
+<b>Confirmation Deadline</b>
+▸ Squad/captain/formation lock 1 hour before each matchday's first kickoff
+▸ Unconfirmed squads score 0 points that matchday
+▸ After deadline you cannot change the squad
+
+<b>Sub Swaps</b>
+▸ Allowed between kickoff windows (not during live matches)
+▸ Locked from 1h before kickoff until all matches in that window finish
+▸ Only swaps between starter and bench of same position
+
+<b>Transfers (per matchday)</b>
+▸ Matchday 1: unlimited free transfers
+▸ Matchday 2: 2 free
+▸ Matchday 3: 2 free
+▸ Round of 16: unlimited free transfers
+▸ Quarter-finals: 4 free
+▸ Semi-finals: 5 free
+▸ Final: 6 free
+▸ Extra transfers cost -3 pts each
+▸ After a transfer your squad is auto-confirmed with the new lineup
+
+<b>Eliminated Teams</b>
+▸ When a nation is knocked out, its players disappear from the picker
+▸ Players already in your squad stay but score 0 — transfer them out
+
+━━━━━━━━━━━━━━━━━━━━
+⚽ <b>POINTS SYSTEM</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>All Players:</b>
+▸ Played (any): +1 pt
+▸ Played 60+ min: +1 pt
+▸ Assist: +3 pts
+▸ Penalty earned: +2 pts
+▸ Penalty conceded: -1 pt
+▸ Penalty missed: -2 pts
+▸ Yellow card: -1 pt
+▸ Red card: -3 pts
+▸ Yellow + Red: -4 pts
+▸ Own goal: -2 pts
+▸ <b>Defensive Contribution</b> (tackles+interceptions+blocks):
+   • DEF: 10+ actions → +2 pts
+   • MID/FW: 12+ actions → +2 pts
+▸ <b>Player of the Match</b> (highest rating): +3 pts
+
+<b>Goalkeeper:</b>
+▸ Goal: +6 pts
+▸ Penalty saved: +5 pts
+▸ Clean sheet (60+ min): +4 pts
+▸ Goals conceded per 2: -1 pt
+▸ Saves per 3: +1 pt
+
+<b>Defender:</b>
+▸ Goal: +6 pts
+▸ Clean sheet (60+ min): +4 pts
+▸ Goals conceded per 2: -1 pt
+
+<b>Midfielder:</b>
+▸ Goal: +5 pts
+▸ Clean sheet (60+ min): +1 pt
+
+<b>Forward:</b>
+▸ Goal: +4 pts
+
+<b>Captain: ×2 all points</b>
+▸ Only starting 11 score points (bench = 0)
+
+━━━━━━━━━━━━━━━━━━━━
+💰 <b>PRIZE POOL — TOP 30</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🥇 1st: [TBD]
+🥈 2nd: [TBD]
+🥉 3rd: [TBD]
+🏅 4th: [TBD]
+🏅 5th: [TBD]
+🎖 6th–10th: [TBD]
+🎖 11th–20th: [TBD]
+🎖 21st–30th: [TBD]
+
+<i>Full prize details announced soon.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🏅 <b>LEADERBOARD</b>
+━━━━━━━━━━━━━━━━━━━━
+
+▸ Overall: total points across all matchdays
+▸ Per matchday: best score that matchday
+▸ Usernames are partially hidden for privacy
+""",
+
         # Notifications
         "notif_deadline_24h": "⏰ <b>24 hours left!</b>\nConfirm your squad before the deadline:\n{deadline}",
         "notif_deadline_1h":  "🚨 <b>1 hour left!</b>\nConfirm your squad NOW:\n{deadline}",
@@ -291,6 +404,116 @@ STRINGS = {
 
 ▸ Generale: punti totali in tutti i round
 ▸ Per round: miglior punteggio di quel round
+▸ I nomi utente sono parzialmente nascosti per privacy
+""",
+
+        "rules_text_wc": """
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>COME GIOCARE</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Rosa</b>
+▸ Scegli 15 giocatori: 2 POR, 5 DIF, 5 CEN, 3 ATT
+▸ Budget: $100M
+▸ <b>Max giocatori per nazionale:</b>
+   • Fase a gironi: 3
+   • Ottavi: 4
+   • Quarti: 5
+   • Semifinali: 6
+   • Finale: 8
+▸ Scegli una formazione per i tuoi 11 titolari
+▸ Panchina: 4 sostituti (1 POR + 3 di movimento)
+
+<b>Capitano</b>
+▸ Devi scegliere un capitano prima di confermare
+▸ Il capitano segna ×2 punti
+▸ Senza capitano non puoi confermare
+
+<b>Deadline di conferma</b>
+▸ Rosa/capitano/formazione si bloccano 1 ora prima del primo calcio d'inizio della giornata
+▸ Rosa non confermata = 0 punti per la giornata
+▸ Dopo la deadline non puoi più modificare la rosa
+
+<b>Cambi panchina</b>
+▸ Consentiti tra una finestra di partite e l'altra (non durante partite in corso)
+▸ Bloccati 1h prima del calcio d'inizio fino al termine di tutte le partite di quella finestra
+▸ Solo scambi titolare/panchina dello stesso ruolo
+
+<b>Trasferimenti (per giornata)</b>
+▸ Giornata 1: trasferimenti illimitati gratis
+▸ Giornata 2: 2 gratis
+▸ Giornata 3: 2 gratis
+▸ Ottavi: trasferimenti illimitati gratis
+▸ Quarti: 4 gratis
+▸ Semifinali: 5 gratis
+▸ Finale: 6 gratis
+▸ Trasferimenti extra costano -3 punti ciascuno
+▸ Dopo un trasferimento la rosa si riconferma automaticamente
+
+<b>Squadre eliminate</b>
+▸ Quando una nazionale è eliminata, i suoi giocatori spariscono dalla selezione
+▸ I giocatori già in rosa restano ma segnano 0 — cedili
+
+━━━━━━━━━━━━━━━━━━━━
+⚽ <b>SISTEMA PUNTI</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Tutti i giocatori:</b>
+▸ Giocato (qualsiasi): +1
+▸ Giocato 60+ min: +1
+▸ Assist: +3
+▸ Rigore conquistato: +2
+▸ Rigore concesso: -1
+▸ Rigore sbagliato: -2
+▸ Cartellino giallo: -1
+▸ Cartellino rosso: -3
+▸ Giallo + Rosso: -4
+▸ Autogol: -2
+▸ <b>Contributo difensivo</b> (contrasti+intercetti+blocchi):
+   • DIF: 10+ azioni → +2
+   • CEN/ATT: 12+ azioni → +2
+▸ <b>Migliore in campo</b> (rating più alto): +3
+
+<b>Portiere:</b>
+▸ Gol: +6 ▸ Rigore parato: +5
+▸ Porta inviolata (60+ min): +4
+▸ Gol subiti ogni 2: -1
+▸ Parate ogni 3: +1
+
+<b>Difensore:</b>
+▸ Gol: +6 ▸ Porta inviolata (60+ min): +4
+▸ Gol subiti ogni 2: -1
+
+<b>Centrocampista:</b>
+▸ Gol: +5 ▸ Porta inviolata (60+ min): +1
+
+<b>Attaccante:</b>
+▸ Gol: +4
+
+<b>Capitano: ×2 punti</b>
+▸ Solo gli 11 titolari segnano punti (panchina = 0)
+
+━━━━━━━━━━━━━━━━━━━━
+💰 <b>MONTEPREMI — TOP 30</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🥇 1°: [TBD]
+🥈 2°: [TBD]
+🥉 3°: [TBD]
+🏅 4°: [TBD]
+🏅 5°: [TBD]
+🎖 6°–10°: [TBD]
+🎖 11°–20°: [TBD]
+🎖 21°–30°: [TBD]
+
+<i>Dettagli premi annunciati a breve.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🏅 <b>CLASSIFICA</b>
+━━━━━━━━━━━━━━━━━━━━
+
+▸ Generale: punti totali in tutte le giornate
+▸ Per giornata: miglior punteggio di quella giornata
 ▸ I nomi utente sono parzialmente nascosti per privacy
 """,
         "notif_result":     "⚽ <b>Risultato</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 Punti aggiornati!",
@@ -441,6 +664,116 @@ STRINGS = {
 ▸ Par round : meilleur score du round
 ▸ Les noms d'utilisateur sont partiellement masqués
 """,
+
+        "rules_text_wc": """
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>COMMENT JOUER</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Effectif</b>
+▸ Choisis 15 joueurs : 2 GB, 5 DEF, 5 MIL, 3 ATT
+▸ Budget : 100M $
+▸ <b>Max joueurs d'une même nation :</b>
+   • Phase de groupes : 3
+   • Huitièmes : 4
+   • Quarts : 5
+   • Demi-finales : 6
+   • Finale : 8
+▸ Choisis une formation pour ton 11 de départ
+▸ Banc : 4 remplaçants (1 GB + 3 de champ)
+
+<b>Capitaine</b>
+▸ Tu dois choisir un capitaine avant de confirmer
+▸ Le capitaine marque ×2 points
+▸ Pas de capitaine = pas de confirmation
+
+<b>Deadline de confirmation</b>
+▸ Équipe/capitaine/formation verrouillés 1h avant le premier coup d'envoi de la journée
+▸ Équipe non confirmée = 0 point cette journée
+▸ Après la deadline, tu ne peux plus modifier l'équipe
+
+<b>Échanges de remplaçants</b>
+▸ Autorisés entre les fenêtres de matchs (pas pendant les matchs en direct)
+▸ Verrouillés 1h avant le coup d'envoi jusqu'à la fin de tous les matchs de cette fenêtre
+▸ Uniquement entre titulaire et remplaçant du même poste
+
+<b>Transferts (par journée)</b>
+▸ Journée 1 : transferts gratuits illimités
+▸ Journée 2 : 2 gratuits
+▸ Journée 3 : 2 gratuits
+▸ Huitièmes : transferts gratuits illimités
+▸ Quarts : 4 gratuits
+▸ Demi-finales : 5 gratuits
+▸ Finale : 6 gratuits
+▸ Transferts supplémentaires : -3 points chacun
+▸ Après un transfert, l'équipe est reconfirmée automatiquement
+
+<b>Équipes éliminées</b>
+▸ Quand une nation est éliminée, ses joueurs disparaissent de la sélection
+▸ Les joueurs déjà dans ton équipe restent mais marquent 0 — transfère-les
+
+━━━━━━━━━━━━━━━━━━━━
+⚽ <b>SYSTÈME DE POINTS</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Tous les joueurs :</b>
+▸ A joué (quelconque) : +1
+▸ A joué 60+ min : +1
+▸ Passe décisive : +3
+▸ Pénalty obtenu : +2
+▸ Pénalty concédé : -1
+▸ Pénalty raté : -2
+▸ Carton jaune : -1
+▸ Carton rouge : -3
+▸ Jaune + Rouge : -4
+▸ But contre son camp : -2
+▸ <b>Contribution défensive</b> (tacles+interceptions+blocs) :
+   • DEF : 10+ actions → +2
+   • MIL/ATT : 12+ actions → +2
+▸ <b>Homme du match</b> (note la plus haute) : +3
+
+<b>Gardien :</b>
+▸ But : +6 ▸ Pénalty arrêté : +5
+▸ Clean sheet (60+ min) : +4
+▸ Buts encaissés tous les 2 : -1
+▸ Arrêts tous les 3 : +1
+
+<b>Défenseur :</b>
+▸ But : +6 ▸ Clean sheet (60+ min) : +4
+▸ Buts encaissés tous les 2 : -1
+
+<b>Milieu :</b>
+▸ But : +5 ▸ Clean sheet (60+ min) : +1
+
+<b>Attaquant :</b>
+▸ But : +4
+
+<b>Capitaine : ×2 tous les points</b>
+▸ Seul le 11 titulaire marque (banc = 0)
+
+━━━━━━━━━━━━━━━━━━━━
+💰 <b>CAGNOTTE — TOP 30</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🥇 1er : [TBD]
+🥈 2e : [TBD]
+🥉 3e : [TBD]
+🏅 4e : [TBD]
+🏅 5e : [TBD]
+🎖 6e–10e : [TBD]
+🎖 11e–20e : [TBD]
+🎖 21e–30e : [TBD]
+
+<i>Détails des prix annoncés bientôt.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🏅 <b>CLASSEMENT</b>
+━━━━━━━━━━━━━━━━━━━━
+
+▸ Général : total des points sur toutes les journées
+▸ Par journée : meilleur score de la journée
+▸ Les noms d'utilisateur sont partiellement masqués
+""",
         "notif_result":     "⚽ <b>Résultat</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 Points mis à jour!",
         "notif_gw_summary": "📊 <b>Journée {n} terminée!</b>\nVos points: <b>{pts}</b>",
         "btn_swap_subs": "🔁 Changer Remplacants",
@@ -586,6 +919,116 @@ STRINGS = {
 
 ▸ General: puntos totales en todas las rondas
 ▸ Por ronda: mejor puntuación de esa ronda
+▸ Los nombres de usuario están parcialmente ocultos
+""",
+
+        "rules_text_wc": """
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>CÓMO JUGAR</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Plantilla</b>
+▸ Elige 15 jugadores: 2 POR, 5 DEF, 5 MED, 3 DEL
+▸ Presupuesto: 100M $
+▸ <b>Máx jugadores de una selección:</b>
+   • Fase de grupos: 3
+   • Octavos: 4
+   • Cuartos: 5
+   • Semifinales: 6
+   • Final: 8
+▸ Elige una formación para tu 11 titular
+▸ Banquillo: 4 suplentes (1 POR + 3 de campo)
+
+<b>Capitán</b>
+▸ Debes elegir un capitán antes de confirmar
+▸ El capitán suma ×2 puntos
+▸ Sin capitán no se puede confirmar
+
+<b>Plazo de confirmación</b>
+▸ Plantilla/capitán/formación se bloquean 1h antes del primer saque inicial de la jornada
+▸ Plantilla no confirmada = 0 puntos en esa jornada
+▸ Tras el plazo no puedes modificar la plantilla
+
+<b>Cambios de banquillo</b>
+▸ Permitidos entre ventanas de partidos (no durante partidos en vivo)
+▸ Bloqueados desde 1h antes del saque inicial hasta que terminen todos los partidos
+▸ Solo entre titular y suplente de la misma posición
+
+<b>Traspasos (por jornada)</b>
+▸ Jornada 1: traspasos gratis ilimitados
+▸ Jornada 2: 2 gratis
+▸ Jornada 3: 2 gratis
+▸ Octavos: traspasos gratis ilimitados
+▸ Cuartos: 4 gratis
+▸ Semifinales: 5 gratis
+▸ Final: 6 gratis
+▸ Traspasos extra: -3 puntos cada uno
+▸ Tras un traspaso, la plantilla se reconfirma automáticamente
+
+<b>Equipos eliminados</b>
+▸ Cuando una selección es eliminada, sus jugadores desaparecen de la selección
+▸ Los jugadores ya en tu plantilla se quedan pero suman 0 — traspásalos
+
+━━━━━━━━━━━━━━━━━━━━
+⚽ <b>SISTEMA DE PUNTOS</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Todos los jugadores:</b>
+▸ Jugó (cualquier minuto): +1
+▸ Jugó 60+ min: +1
+▸ Asistencia: +3
+▸ Penalti provocado: +2
+▸ Penalti concedido: -1
+▸ Penalti fallado: -2
+▸ Tarjeta amarilla: -1
+▸ Tarjeta roja: -3
+▸ Amarilla + Roja: -4
+▸ Gol en propia: -2
+▸ <b>Contribución defensiva</b> (entradas+intercepciones+bloqueos):
+   • DEF: 10+ acciones → +2
+   • MED/DEL: 12+ acciones → +2
+▸ <b>Jugador del partido</b> (mejor valoración): +3
+
+<b>Portero:</b>
+▸ Gol: +6 ▸ Penalti parado: +5
+▸ Portería a cero (60+ min): +4
+▸ Goles encajados cada 2: -1
+▸ Paradas cada 3: +1
+
+<b>Defensa:</b>
+▸ Gol: +6 ▸ Portería a cero (60+ min): +4
+▸ Goles encajados cada 2: -1
+
+<b>Centrocampista:</b>
+▸ Gol: +5 ▸ Portería a cero (60+ min): +1
+
+<b>Delantero:</b>
+▸ Gol: +4
+
+<b>Capitán: ×2 todos los puntos</b>
+▸ Solo los 11 titulares puntúan (banquillo = 0)
+
+━━━━━━━━━━━━━━━━━━━━
+💰 <b>BOTE — TOP 30</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🥇 1º: [TBD]
+🥈 2º: [TBD]
+🥉 3º: [TBD]
+🏅 4º: [TBD]
+🏅 5º: [TBD]
+🎖 6º–10º: [TBD]
+🎖 11º–20º: [TBD]
+🎖 21º–30º: [TBD]
+
+<i>Detalles de premios anunciados pronto.</i>
+
+━━━━━━━━━━━━━━━━━━━━
+🏅 <b>CLASIFICACIÓN</b>
+━━━━━━━━━━━━━━━━━━━━
+
+▸ General: puntos totales en todas las jornadas
+▸ Por jornada: mejor puntuación de esa jornada
 ▸ Los nombres de usuario están parcialmente ocultos
 """,
         "notif_result":     "⚽ <b>Resultado</b>\n\n{home} {hs} - {as_} {away}\n\n🏆 ¡Puntos actualizados!",
