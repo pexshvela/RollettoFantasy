@@ -606,6 +606,46 @@ async def cmd_autodeadline(message: Message, state: FSMContext):
     parts = message.text.strip().split()
     tournament = await sheets.get_tournament()
 
+    # ── World Cup: resolve via matchday → round name (group stage uses
+    #    "Group Stage - N", not "Regular Season - N") ──
+    if tournament == "wc":
+        WC_MD_TO_ROUND = {
+            1: "Group Stage - 1", 2: "Group Stage - 2", 3: "Group Stage - 3",
+            4: "Round of 16", 5: "Quarter-finals", 6: "Semi-finals", 7: "Final",
+        }
+        # Determine matchday: explicit arg, else current
+        md = None
+        if len(parts) >= 2 and parts[1].isdigit():
+            md = int(parts[1])
+        else:
+            cur = await _fapi.get_current_round(tournament)
+            md = _fapi.wc_matchday(cur) if cur else None
+        if md is None or md not in WC_MD_TO_ROUND:
+            await message.answer("❌ Could not determine World Cup matchday. Usage: /autodeadline 1-7")
+            return
+        round_name = WC_MD_TO_ROUND[md]
+        fixtures = await _fapi.get_round_fixtures_by_name(tournament, round_name)
+        if not fixtures:
+            await message.answer(f"❌ No fixtures found for {round_name}.")
+            return
+        earliest_ts = None
+        for f in fixtures:
+            ts = f.get("kickoff_timestamp") or 0
+            if ts and (earliest_ts is None or ts < earliest_ts):
+                earliest_ts = ts
+        if not earliest_ts:
+            await message.answer("❌ Could not determine kickoff times from API.")
+            return
+        deadline_dt = _dt.fromtimestamp(earliest_ts, tz=_tz.utc) - _td(hours=1)
+        await sheets.set_round_deadline(md, deadline_dt.isoformat())
+        await message.answer(
+            f"✅ Auto-deadline set for <b>Matchday {md}</b> ({round_name})\n"
+            f"⏰ <b>{deadline_dt.strftime('%Y-%m-%d %H:%M')} UTC</b>\n"
+            f"(1 hour before first kickoff)",
+            parse_mode="HTML"
+        )
+        return
+
     # Determine round
     if len(parts) >= 2:
         round_arg = " ".join(parts[1:]).strip()
