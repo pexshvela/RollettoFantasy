@@ -601,6 +601,7 @@ async def get_recent_matches(days: int = 3, tournament: str = None) -> list[dict
             TOURNAMENT_NAMES = {
                 "pl":  ["premier league"],
                 "ucl": ["uefa champions league", "champions league"],
+                "wc":  ["world cup", "fifa world cup"],
             }
             keywords = TOURNAMENT_NAMES.get(tournament.lower(), [tournament.lower()])
             rows = [r for r in rows
