@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import sheets
+import config
 from players import get_player, fmt_price, mask_username
 from states import Stats, Results
 from translations import t
@@ -291,23 +292,39 @@ async def show_overall_lb(callback: CallbackQuery, state: FSMContext):
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
+    tournament = await sheets.get_tournament()
+    show_prizes = (tournament == "wc")
 
-    rows = await sheets.get_overall_leaderboard(20)
-    my_uid = uid
+    rows = await sheets.get_overall_leaderboard(10)
+
+    def prize_str(rank: int) -> str:
+        if not show_prizes:
+            return ""
+        amt = config.WC_PRIZES.get(rank)
+        return f" — ${amt}" if amt else ""
 
     lines = [t(lang, "lb_overall"), ""]
     my_in_list = False
     for i, r in enumerate(rows, 1):
-        username = mask_username(r.get("username", "?"))
-        pts      = r.get("total_points", 0)
-        is_me    = r.get("telegram_id") == my_uid
+        is_me = r.get("telegram_id") == uid
+        # Show the user's own username in full; mask everyone else's.
+        username = r.get("username", "?") if is_me else mask_username(r.get("username", "?"))
+        pts = r.get("total_points", 0)
         if is_me:
             my_in_list = True
         me = " 👈" if is_me else ""
-        lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
+        lines.append(
+            t(lang, "lb_entry", rank=i, username=username, pts=pts) + prize_str(i) + me
+        )
+
     if not my_in_list:
-        my_pts = (user or {}).get("total_points", 0)
-        lines.append(f"\n— You: <b>{my_pts} pts</b> (not in top 20)")
+        my_rank, my_pts = await sheets.get_overall_rank(uid)
+        my_name = (user or {}).get("rolletto_username") or (user or {}).get("tg_username") or (user or {}).get("username") or "?"
+        if my_rank:
+            lines.append("")
+            lines.append(
+                t(lang, "lb_entry", rank=my_rank, username=my_name, pts=my_pts) + prize_str(my_rank) + " 👈"
+            )
 
     kb = InlineKeyboardBuilder()
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
@@ -332,7 +349,8 @@ async def show_round_lb(callback: CallbackQuery, state: FSMContext):
     # Aggregate points directly from the matches that belong to this round.
     # This is reliable regardless of how gameweek_ids were assigned.
     round_str = (rnd or {}).get("round_str") if rnd else None
-    rows = await sheets.get_round_leaderboard(round_str, 20) if round_str else []
+    rows = await sheets.get_round_leaderboard(round_str, 10) if round_str else []
+    used_round_str = round_str
     if not rows:
         # Fallback to gameweek-based aggregation if the round string is unknown
         # or no matches are cached for it yet.
@@ -342,20 +360,26 @@ async def show_round_lb(callback: CallbackQuery, state: FSMContext):
             gw_id = gw["id"] if gw else int(round_key)
         else:
             gw_id = gws[-1]["id"] if gws else 1
-        rows = await sheets.get_gameweek_leaderboard(gw_id, 20)
+        rows = await sheets.get_gameweek_leaderboard(gw_id, 10)
+        used_round_str = None  # rank helper only works for round_str path
 
     lines = [t(lang, "lb_gameweek", n=display), ""]
     my_in_list = False
     for i, r in enumerate(rows, 1):
-        username = mask_username(r.get("username", "?"))
-        pts      = r.get("total_points", 0)
-        is_me    = r.get("telegram_id") == uid
+        is_me = r.get("telegram_id") == uid
+        username = r.get("username", "?") if is_me else mask_username(r.get("username", "?"))
+        pts = r.get("total_points", 0)
         if is_me:
             my_in_list = True
         me = " 👈" if is_me else ""
         lines.append(t(lang, "lb_entry", rank=i, username=username, pts=pts) + me)
-    if not my_in_list:
-        lines.append(f"\n— You: <b>0 pts</b> this round")
+
+    if not my_in_list and used_round_str:
+        my_rank, my_pts = await sheets.get_round_rank(uid, used_round_str)
+        my_name = (user or {}).get("rolletto_username") or (user or {}).get("tg_username") or (user or {}).get("username") or "?"
+        if my_rank:
+            lines.append("")
+            lines.append(t(lang, "lb_entry", rank=my_rank, username=my_name, pts=my_pts) + " 👈")
 
     kb = InlineKeyboardBuilder()
     kb.button(text="🏆 Overall", callback_data="lb:overall")
