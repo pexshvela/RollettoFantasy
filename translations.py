@@ -249,16 +249,16 @@ STRINGS = {
 💰 <b>PRIZE POOL — TOP 30</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-🥇 1st: [TBD]
-🥈 2nd: [TBD]
-🥉 3rd: [TBD]
-🏅 4th: [TBD]
-🏅 5th: [TBD]
-🎖 6th–10th: [TBD]
-🎖 11th–20th: [TBD]
-🎖 21st–30th: [TBD]
+🥇 1st: $500
+🥈 2nd: $300
+🥉 3rd: $200
+🏅 4th: $50
+🏅 5th: $50
+🎖 6th–10th: $30 each
+🎖 11th–20th: $15 each
+🎖 21st–30th: $10 each
 
-<i>Full prize details announced soon.</i>
+<i>Total prize pool: $1,500</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 🏅 <b>LEADERBOARD</b>
@@ -497,16 +497,16 @@ STRINGS = {
 💰 <b>MONTEPREMI — TOP 30</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-🥇 1°: [TBD]
-🥈 2°: [TBD]
-🥉 3°: [TBD]
-🏅 4°: [TBD]
-🏅 5°: [TBD]
-🎖 6°–10°: [TBD]
-🎖 11°–20°: [TBD]
-🎖 21°–30°: [TBD]
+🥇 1°: $500
+🥈 2°: $300
+🥉 3°: $200
+🏅 4°: $50
+🏅 5°: $50
+🎖 6°–10°: $30 ciascuno
+🎖 11°–20°: $15 ciascuno
+🎖 21°–30°: $10 ciascuno
 
-<i>Dettagli premi annunciati a breve.</i>
+<i>Montepremi totale: $1.500</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 🏅 <b>CLASSIFICA</b>
@@ -755,16 +755,16 @@ STRINGS = {
 💰 <b>CAGNOTTE — TOP 30</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-🥇 1er : [TBD]
-🥈 2e : [TBD]
-🥉 3e : [TBD]
-🏅 4e : [TBD]
-🏅 5e : [TBD]
-🎖 6e–10e : [TBD]
-🎖 11e–20e : [TBD]
-🎖 21e–30e : [TBD]
+🥇 1er : $500
+🥈 2e : $300
+🥉 3e : $200
+🏅 4e : $50
+🏅 5e : $50
+🎖 6e–10e : $30 chacun
+🎖 11e–20e : $15 chacun
+🎖 21e–30e : $10 chacun
 
-<i>Détails des prix annoncés bientôt.</i>
+<i>Cagnotte totale : $1 500</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 🏅 <b>CLASSEMENT</b>
@@ -1012,16 +1012,16 @@ STRINGS = {
 💰 <b>BOTE — TOP 30</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-🥇 1º: [TBD]
-🥈 2º: [TBD]
-🥉 3º: [TBD]
-🏅 4º: [TBD]
-🏅 5º: [TBD]
-🎖 6º–10º: [TBD]
-🎖 11º–20º: [TBD]
-🎖 21º–30º: [TBD]
+🥇 1º: $500
+🥈 2º: $300
+🥉 3º: $200
+🏅 4º: $50
+🏅 5º: $50
+🎖 6º–10º: $30 cada uno
+🎖 11º–20º: $15 cada uno
+🎖 21º–30º: $10 cada uno
 
-<i>Detalles de premios anunciados pronto.</i>
+<i>Bote total: $1.500</i>
 
 ━━━━━━━━━━━━━━━━━━━━
 🏅 <b>CLASIFICACIÓN</b>
