@@ -54,6 +54,17 @@ WC_EXTRA_TRANSFER_COST = 3
 # Dynamic max players per nation by matchday (group=3, then scales each knockout round)
 WC_MAX_PER_NATION = {1: 3, 2: 3, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8}
 
+# Overall prize pool by final rank (USD). Ranks not listed get no prize.
+# Total: $1,500. Shown on the Overall leaderboard next to each rank.
+WC_PRIZES = {
+    1: 500, 2: 300, 3: 200, 4: 50, 5: 50,
+    6: 30, 7: 30, 8: 30, 9: 30, 10: 30,
+    11: 15, 12: 15, 13: 15, 14: 15, 15: 15,
+    16: 15, 17: 15, 18: 15, 19: 15, 20: 15,
+    21: 10, 22: 10, 23: 10, 24: 10, 25: 10,
+    26: 10, 27: 10, 28: 10, 29: 10, 30: 10,
+}
+
 # Default active tournament
 DEFAULT_TOURNAMENT = os.getenv("DEFAULT_TOURNAMENT", "pl")
 
