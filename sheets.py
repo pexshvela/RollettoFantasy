@@ -735,6 +735,50 @@ async def get_gameweek_points(telegram_id: int, gameweek_id: int) -> int:
 
 # ── Leaderboard ───────────────────────────────────────────────────────────────
 
+async def get_overall_rank(telegram_id: int) -> tuple[int, int]:
+    """Return (rank, total_points) for a user in the overall standings,
+    using standard competition ranking (ties share a rank: 5,5,7).
+    Rank is 1-based. Returns (0, 0) if the user has no record."""
+    try:
+        sb = _get_sb()
+        me = sb.table("users").select("total_points").eq(
+            "telegram_id", telegram_id
+        ).limit(1).execute()
+        if not me.data:
+            return (0, 0)
+        my_pts = int(me.data[0].get("total_points") or 0)
+        # Count users strictly above me; rank = that count + 1
+        above = sb.table("users").select(
+            "telegram_id", count="exact"
+        ).gt("total_points", my_pts).execute()
+        rank = (above.count or 0) + 1
+        return (rank, my_pts)
+    except Exception as e:
+        logger.error("get_overall_rank error: %s", e)
+        return (0, 0)
+
+
+async def get_round_rank(telegram_id: int, round_str: str) -> tuple[int, int]:
+    """Return (rank, points) for a user within a specific round's standings,
+    standard competition ranking. Returns (0, 0) if no data for the round."""
+    try:
+        if not round_str:
+            return (0, 0)
+        full = await get_round_leaderboard(round_str, limit=100000)
+        my_pts = None
+        for r in full:
+            if r.get("telegram_id") == telegram_id:
+                my_pts = r.get("total_points", 0)
+                break
+        if my_pts is None:
+            return (0, 0)
+        above = sum(1 for r in full if r.get("total_points", 0) > my_pts)
+        return (above + 1, my_pts)
+    except Exception as e:
+        logger.error("get_round_rank error: %s", e)
+        return (0, 0)
+
+
 async def get_overall_leaderboard(limit: int = 20) -> list[dict]:
     try:
         res = _get_sb().table("users").select(
