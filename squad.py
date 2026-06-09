@@ -435,19 +435,33 @@ async def noop(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "squad:randomise")
-async def squad_randomise(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "squad:randomise_formation")
+async def squad_randomise_formation(callback: CallbackQuery, state: FSMContext):
+    """Formation screen: pick a RANDOM formation only, then open the (empty)
+    squad menu so the user fills players themselves."""
     import random
     from helpers import FORMATIONS
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
+
+    formation = random.choice(list(FORMATIONS.keys()))
+    await sheets.update_user(uid, formation=formation)
+    await state.update_data(formation=formation, squad={}, captain="")
+    await state.set_state(Squad.picking_gk)
+    await callback.answer(f"🎲 {formation}")
+    await _show_squad_menu(callback.message, lang, formation, {}, "")
+
+
+@router.callback_query(F.data == "squad:randomise")
+async def squad_randomise(callback: CallbackQuery, state: FSMContext):
+    """Squad menu: fill PLAYERS only (starters + bench + captain) using the
+    formation the user already chose. Does not change the formation."""
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
     data = await state.get_data()
-    # If invoked from the formation screen there's no chosen formation yet —
-    # pick one at random so Randomise works as a one-tap full build.
-    formation = data.get("formation") or (user or {}).get("formation")
-    if not formation:
-        formation = random.choice(list(FORMATIONS.keys()))
+    formation = data.get("formation") or (user or {}).get("formation", "4-3-3")
 
     await callback.answer(t(lang, "rnd_building"))
     squad, captain = await _randomise_squad(formation)
@@ -455,9 +469,7 @@ async def squad_randomise(callback: CallbackQuery, state: FSMContext):
         await callback.answer(t(lang, "rnd_failed"), show_alert=True)
         return
 
-    await sheets.update_user(uid, formation=formation)
     await state.update_data(squad=squad, formation=formation, captain=captain)
-    await state.set_state(Squad.picking_gk)
     await _show_squad_menu(callback.message, lang, formation, squad, captain)
 
 
