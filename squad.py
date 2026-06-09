@@ -92,6 +92,82 @@ def _slot_label(slot: str, pos: str, squad: dict, formation: str, captain: str) 
 _squad_menu_msg: dict[int, int] = {}  # uid -> message_id of last squad menu
 
 
+async def _randomise_squad(formation: str) -> tuple[dict, str] | tuple[None, None]:
+    """Build a complete, budget-valid random squad for the given formation.
+    Respects: position counts, total budget, max-per-nation cap, and excludes
+    eliminated teams. Returns (squad_dict, captain_pid) or (None, None) if it
+    couldn't assemble a valid squad after several attempts."""
+    import random
+
+    slots = _all_slots_for(formation)                 # list of (slot, pos)
+    starters = _starter_slots(formation)
+    max_per_nation = await sheets.get_max_per_nation()
+    eliminated = await sheets.get_eliminated_teams()
+
+    # Pre-bucket affordable candidates per position, excluding eliminated teams.
+    pools: dict[str, list] = {}
+    for posname in ("GK", "DEF", "MF", "FW"):
+        pool = [p for p in get_players_by_position(posname)
+                if p.get("team") not in eliminated and p.get("price", 0) > 0]
+        pools[posname] = pool
+
+    budget = config.TOTAL_BUDGET
+
+    for _attempt in range(40):
+        squad: dict = {}
+        nation_count: dict[str, int] = {}
+        spent = 0
+        ok = True
+
+        # Fill the most constrained positions first (fewer candidates → GK/FW),
+        # but keep it simple: order slots so we leave room for the rest.
+        remaining_slots = list(slots)
+
+        for idx, (slot, pos) in enumerate(remaining_slots):
+            slots_left_after = len(remaining_slots) - idx - 1
+            # Reserve a minimal amount for each remaining slot so we don't blow
+            # the budget early. Use the cheapest available price per position as
+            # the reserve floor.
+            reserve = 0
+            for s2, p2 in remaining_slots[idx+1:]:
+                cheapest = min((pp["price"] for pp in pools[p2]), default=0)
+                reserve += cheapest
+            max_spend_here = budget - spent - reserve
+
+            candidates = [
+                p for p in pools[pos]
+                if p["price"] <= max_spend_here
+                and nation_count.get(p.get("team"), 0) < max_per_nation
+                and p["id"] not in squad.values()
+            ]
+            if not candidates:
+                ok = False
+                break
+
+            # Weighted toward variety: pick randomly, but bias slightly so we
+            # don't always grab the cheapest. Plain random choice is fine.
+            choice = random.choice(candidates)
+            squad[slot] = choice["id"]
+            spent += choice["price"]
+            team = choice.get("team")
+            nation_count[team] = nation_count.get(team, 0) + 1
+
+        if not ok:
+            continue
+        if not _is_complete(squad, formation):
+            continue
+
+        # Random captain from the starting XI
+        starter_pids = [squad[s] for s in starters if squad.get(s)]
+        if not starter_pids:
+            continue
+        captain = random.choice(starter_pids)
+        squad["formation"] = formation
+        return squad, captain
+
+    return None, None
+
+
 async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
                             captain: str = "", edit: bool = True):
     budget_left = config.TOTAL_BUDGET - calc_squad_cost(squad)
@@ -107,6 +183,10 @@ async def _show_squad_menu(message, lang: str, formation: str, squad: dict,
     starters = _starter_slots(formation)
     all_slots = _all_slots_for(formation)
     kb = InlineKeyboardBuilder()
+
+    # Randomise: fill the whole squad (starters + bench + captain) at random,
+    # respecting budget, position counts and per-nation cap.
+    kb.button(text=t(lang, "btn_randomise"), callback_data="squad:randomise")
 
     bench_slots = [s for s, _ in all_slots if s not in starters]
     shown_bench = False
@@ -308,6 +388,24 @@ async def squad_list(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "squad:noop")
 async def noop(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+
+
+@router.callback_query(F.data == "squad:randomise")
+async def squad_randomise(callback: CallbackQuery, state: FSMContext):
+    uid  = callback.from_user.id
+    user = await sheets.get_user(uid)
+    lang = await get_lang(uid, user)
+    data = await state.get_data()
+    formation = data.get("formation", (user or {}).get("formation", "4-3-3"))
+
+    await callback.answer(t(lang, "rnd_building"))
+    squad, captain = await _randomise_squad(formation)
+    if not squad:
+        await callback.answer(t(lang, "rnd_failed"), show_alert=True)
+        return
+
+    await state.update_data(squad=squad, formation=formation, captain=captain)
+    await _show_squad_menu(callback.message, lang, formation, squad, captain)
 
 
 @router.callback_query(F.data.startswith("slot:"))
