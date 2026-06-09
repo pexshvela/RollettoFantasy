@@ -37,8 +37,9 @@ def formation_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for f in FORMATIONS:
         kb.button(text=f"⚽ {f}", callback_data=f"formation:{f}")
+    kb.button(text=t(lang, "btn_randomise"), callback_data="squad:randomise")
     kb.button(text=t(lang, "back_home"), callback_data="home:back")
-    kb.adjust(2, 2, 2, 1)
+    kb.adjust(2, 2, 2, 1, 1)
     return kb.as_markup()
 
 
