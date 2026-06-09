@@ -95,8 +95,9 @@ _squad_menu_msg: dict[int, int] = {}  # uid -> message_id of last squad menu
 async def _randomise_squad(formation: str) -> tuple[dict, str] | tuple[None, None]:
     """Build a complete, budget-valid random squad for the given formation.
     Respects: position counts, total budget, max-per-nation cap, and excludes
-    eliminated teams. Returns (squad_dict, captain_pid) or (None, None) if it
-    couldn't assemble a valid squad after several attempts."""
+    eliminated teams. Aims to spend in the $90M–$100M range for a realistic
+    team. Returns (squad_dict, captain_pid) or (None, None) if it couldn't
+    assemble a valid squad after several attempts."""
     import random
 
     slots = _all_slots_for(formation)                 # list of (slot, pos)
@@ -112,41 +113,51 @@ async def _randomise_squad(formation: str) -> tuple[dict, str] | tuple[None, Non
         pools[posname] = pool
 
     budget = config.TOTAL_BUDGET
+    target_floor = int(budget * 0.90)   # aim to spend at least 90% ($90M of $100M)
 
-    for _attempt in range(40):
+    for _attempt in range(60):
         squad: dict = {}
         nation_count: dict[str, int] = {}
         spent = 0
         ok = True
-
-        # Fill the most constrained positions first (fewer candidates → GK/FW),
-        # but keep it simple: order slots so we leave room for the rest.
         remaining_slots = list(slots)
+        n = len(remaining_slots)
 
         for idx, (slot, pos) in enumerate(remaining_slots):
-            slots_left_after = len(remaining_slots) - idx - 1
-            # Reserve a minimal amount for each remaining slot so we don't blow
-            # the budget early. Use the cheapest available price per position as
-            # the reserve floor.
+            # Budget still unspent and slots still to fill (including this one)
+            slots_left = n - idx
+            # Reserve the cheapest possible price for each *subsequent* slot so we
+            # never paint ourselves out of a valid completion.
             reserve = 0
             for s2, p2 in remaining_slots[idx+1:]:
-                cheapest = min((pp["price"] for pp in pools[p2]), default=0)
-                reserve += cheapest
+                reserve += min((pp["price"] for pp in pools[p2]), default=0)
             max_spend_here = budget - spent - reserve
 
-            candidates = [
+            # To hit the target_floor, aim for a per-slot average of the budget
+            # still "needed" spread over remaining slots, and prefer candidates
+            # at or above that floor when possible.
+            need = max(0, target_floor - spent)
+            ideal_here = need / slots_left if slots_left else 0
+
+            valid = [
                 p for p in pools[pos]
                 if p["price"] <= max_spend_here
                 and nation_count.get(p.get("team"), 0) < max_per_nation
                 and p["id"] not in squad.values()
             ]
-            if not candidates:
+            if not valid:
                 ok = False
                 break
 
-            # Weighted toward variety: pick randomly, but bias slightly so we
-            # don't always grab the cheapest. Plain random choice is fine.
-            choice = random.choice(candidates)
+            # Prefer players priced at/above the ideal (to push spend up), but if
+            # none qualify, fall back to the most expensive affordable ones.
+            at_or_above = [p for p in valid if p["price"] >= ideal_here]
+            pick_pool = at_or_above if at_or_above else valid
+            # Bias toward pricier picks: take a random one from the top slice.
+            pick_pool.sort(key=lambda p: -p["price"])
+            top_slice = pick_pool[:max(3, len(pick_pool) // 3)]
+            choice = random.choice(top_slice)
+
             squad[slot] = choice["id"]
             spent += choice["price"]
             team = choice.get("team")
@@ -156,6 +167,9 @@ async def _randomise_squad(formation: str) -> tuple[dict, str] | tuple[None, Non
             continue
         if not _is_complete(squad, formation):
             continue
+        # Enforce the 90M–100M target; retry if we fell short or somehow exceeded.
+        if spent < target_floor or spent > budget:
+            continue
 
         # Random captain from the starting XI
         starter_pids = [squad[s] for s in starters if squad.get(s)]
@@ -164,6 +178,37 @@ async def _randomise_squad(formation: str) -> tuple[dict, str] | tuple[None, Non
         captain = random.choice(starter_pids)
         squad["formation"] = formation
         return squad, captain
+
+    # Fallback: if the 90M target proved too tight (e.g. cheap player pool),
+    # accept the best valid squad we can build without the floor constraint.
+    for _attempt in range(40):
+        squad = {}
+        nation_count = {}
+        spent = 0
+        ok = True
+        for idx, (slot, pos) in enumerate(slots):
+            reserve = sum(min((pp["price"] for pp in pools[p2]), default=0)
+                          for s2, p2 in slots[idx+1:])
+            max_spend_here = budget - spent - reserve
+            valid = [p for p in pools[pos]
+                     if p["price"] <= max_spend_here
+                     and nation_count.get(p.get("team"), 0) < max_per_nation
+                     and p["id"] not in squad.values()]
+            if not valid:
+                ok = False
+                break
+            valid.sort(key=lambda p: -p["price"])
+            choice = random.choice(valid[:max(3, len(valid) // 3)])
+            squad[slot] = choice["id"]
+            spent += choice["price"]
+            nation_count[choice.get("team")] = nation_count.get(choice.get("team"), 0) + 1
+        if not ok or not _is_complete(squad, formation) or spent > budget:
+            continue
+        starter_pids = [squad[s] for s in starters if squad.get(s)]
+        if not starter_pids:
+            continue
+        squad["formation"] = formation
+        return squad, random.choice(starter_pids)
 
     return None, None
 
@@ -392,11 +437,17 @@ async def noop(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "squad:randomise")
 async def squad_randomise(callback: CallbackQuery, state: FSMContext):
+    import random
+    from helpers import FORMATIONS
     uid  = callback.from_user.id
     user = await sheets.get_user(uid)
     lang = await get_lang(uid, user)
     data = await state.get_data()
-    formation = data.get("formation", (user or {}).get("formation", "4-3-3"))
+    # If invoked from the formation screen there's no chosen formation yet —
+    # pick one at random so Randomise works as a one-tap full build.
+    formation = data.get("formation") or (user or {}).get("formation")
+    if not formation:
+        formation = random.choice(list(FORMATIONS.keys()))
 
     await callback.answer(t(lang, "rnd_building"))
     squad, captain = await _randomise_squad(formation)
@@ -404,7 +455,9 @@ async def squad_randomise(callback: CallbackQuery, state: FSMContext):
         await callback.answer(t(lang, "rnd_failed"), show_alert=True)
         return
 
+    await sheets.update_user(uid, formation=formation)
     await state.update_data(squad=squad, formation=formation, captain=captain)
+    await state.set_state(Squad.picking_gk)
     await _show_squad_menu(callback.message, lang, formation, squad, captain)
 
 
