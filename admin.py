@@ -613,7 +613,13 @@ async def cmd_autodeadline(message: Message, state: FSMContext):
             1: "Group Stage - 1", 2: "Group Stage - 2", 3: "Group Stage - 3",
             4: "Round of 16", 5: "Quarter-finals", 6: "Semi-finals", 7: "Final",
         }
-        # Determine matchday: explicit arg, else current
+        WC_PREV_ROUND = {
+            2: "Group Stage - 1", 3: "Group Stage - 2",
+            4: "Group Stage - 3", 5: "Round of 16",
+            6: "Quarter-finals", 7: "Semi-finals",
+        }
+
+        # Determine matchday: explicit arg, else current from API
         md = None
         if len(parts) >= 2 and parts[1].isdigit():
             md = int(parts[1])
@@ -623,25 +629,63 @@ async def cmd_autodeadline(message: Message, state: FSMContext):
         if md is None or md not in WC_MD_TO_ROUND:
             await message.answer("❌ Could not determine World Cup matchday. Usage: /autodeadline 1-7")
             return
+
         round_name = WC_MD_TO_ROUND[md]
+
+        # ── 1. Fetch THIS matchday's fixtures → confirmation deadline ──
         fixtures = await _fapi.get_round_fixtures_by_name(tournament, round_name)
         if not fixtures:
             await message.answer(f"❌ No fixtures found for {round_name}.")
             return
-        earliest_ts = None
-        for f in fixtures:
-            ts = f.get("kickoff_timestamp") or 0
-            if ts and (earliest_ts is None or ts < earliest_ts):
-                earliest_ts = ts
+        earliest_ts = min((f.get("kickoff_timestamp") or 0 for f in fixtures), default=0)
+        latest_ts   = max((f.get("kickoff_timestamp") or 0 for f in fixtures), default=0)
         if not earliest_ts:
             await message.answer("❌ Could not determine kickoff times from API.")
             return
+
+        # Deadline = 1h before first kickoff of this matchday
         deadline_dt = _dt.fromtimestamp(earliest_ts, tz=_tz.utc) - _td(hours=1)
         await sheets.set_round_deadline(md, deadline_dt.isoformat())
+
+        # ── 2. Transfer window ──
+        free_n = config.WC_TRANSFER_ALLOWANCE.get(md, 1)
+        # free_n = -1 means unlimited → store as 0 (bot convention for unlimited)
+        free_store = 0 if free_n == -1 else free_n
+
+        # Window CLOSES at the deadline (same as confirmation lock)
+        window_close = deadline_dt.isoformat()
+
+        # Window OPENS: from the moment the PREVIOUS matchday's last match
+        # is expected to have finished (last kickoff + 110 min).
+        # For MD1 or any unlimited round with no previous round, open = now.
+        prev_round_name = WC_PREV_ROUND.get(md)
+        window_open_dt = _dt.now(tz=_tz.utc)  # default: now
+        if prev_round_name:
+            prev_fixtures = await _fapi.get_round_fixtures_by_name(tournament, prev_round_name)
+            if prev_fixtures:
+                prev_latest_ts = max(
+                    (f.get("kickoff_timestamp") or 0 for f in prev_fixtures), default=0
+                )
+                if prev_latest_ts:
+                    # Last match of prev round + 110 min = approx end of last match
+                    window_open_dt = _dt.fromtimestamp(prev_latest_ts, tz=_tz.utc) + _td(minutes=110)
+
+        window_open = window_open_dt.isoformat()
+
+        await sheets.set_setting("transfer_window_open",  window_open)
+        await sheets.set_setting("transfer_window_close", window_close)
+        await sheets.set_setting("free_transfers", free_store)
+
+        free_label = "∞ unlimited" if free_n == -1 else str(free_n)
         await message.answer(
-            f"✅ Auto-deadline set for <b>Matchday {md}</b> ({round_name})\n"
-            f"⏰ <b>{deadline_dt.strftime('%Y-%m-%d %H:%M')} UTC</b>\n"
-            f"(1 hour before first kickoff)",
+            f"✅ <b>Matchday {md}</b> ({round_name}) set up:\n\n"
+            f"⏰ <b>Confirmation deadline:</b> {deadline_dt.strftime('%Y-%m-%d %H:%M')} UTC\n"
+            f"   (1h before first kickoff)\n\n"
+            f"🔄 <b>Transfer window:</b>\n"
+            f"   🔓 Open:  {window_open_dt.strftime('%Y-%m-%d %H:%M')} UTC\n"
+            f"   🔒 Close: {deadline_dt.strftime('%Y-%m-%d %H:%M')} UTC\n"
+            f"   🎟 Free transfers: <b>{free_label}</b>\n"
+            f"   💸 Extra cost: <b>-{config.WC_EXTRA_TRANSFER_COST} pts</b>",
             parse_mode="HTML"
         )
         return
