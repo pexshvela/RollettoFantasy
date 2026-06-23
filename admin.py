@@ -611,12 +611,13 @@ async def cmd_autodeadline(message: Message, state: FSMContext):
     if tournament == "wc":
         WC_MD_TO_ROUND = {
             1: "Group Stage - 1", 2: "Group Stage - 2", 3: "Group Stage - 3",
-            4: "Round of 16", 5: "Quarter-finals", 6: "Semi-finals", 7: "Final",
+            4: "Round of 32", 5: "Round of 16", 6: "Quarter-finals",
+            7: "Semi-finals", 8: "Final",
         }
         WC_PREV_ROUND = {
             2: "Group Stage - 1", 3: "Group Stage - 2",
-            4: "Group Stage - 3", 5: "Round of 16",
-            6: "Quarter-finals", 7: "Semi-finals",
+            4: "Group Stage - 3", 5: "Round of 32",
+            6: "Round of 16", 7: "Quarter-finals", 8: "Semi-finals",
         }
 
         # Determine matchday: explicit arg, else current from API
@@ -627,7 +628,7 @@ async def cmd_autodeadline(message: Message, state: FSMContext):
             cur = await _fapi.get_current_round(tournament)
             md = _fapi.wc_matchday(cur) if cur else None
         if md is None or md not in WC_MD_TO_ROUND:
-            await message.answer("❌ Could not determine World Cup matchday. Usage: /autodeadline 1-7")
+            await message.answer("❌ Could not determine World Cup matchday. Usage: /autodeadline 1-8")
             return
 
         round_name = WC_MD_TO_ROUND[md]
