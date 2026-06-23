@@ -91,14 +91,15 @@ async def check_completed_windows(bot):
         # get_setting auto-decodes JSON, so we get back a list (or empty string default).
         pushed_raw = await sheets.get_setting("pushed_window_match_ids", [])
         if isinstance(pushed_raw, list):
-            already_pushed = set(pushed_raw)
+            already_pushed_list = list(pushed_raw)
         elif isinstance(pushed_raw, str) and pushed_raw:
             try:
-                already_pushed = set(_json.loads(pushed_raw))
+                already_pushed_list = list(_json.loads(pushed_raw))
             except Exception:
-                already_pushed = set()
+                already_pushed_list = []
         else:
-            already_pushed = set()
+            already_pushed_list = []
+        already_pushed = set(already_pushed_list)
 
         now_ts = int(time.time())
         # A window is "newly complete" if: all_done AND kicked off within last 48h
@@ -133,11 +134,15 @@ async def check_completed_windows(bot):
             except Exception as e:
                 logger.warning("Could not push home to %s: %s", uid, e)
 
-        # Mark these windows as pushed (set_setting will JSON-encode the list)
+        # Mark these windows as pushed. Preserve insertion ORDER (list, not set)
+        # so trimming keeps the most RECENT keys instead of random ones — the
+        # previous set-slice could drop already-pushed keys and re-push forever.
         for _w, window_key in newly_complete:
-            already_pushed.add(window_key)
-        # Keep only most recent 50 entries to avoid unbounded growth
-        trimmed = list(already_pushed)[-50:]
+            if window_key not in already_pushed:
+                already_pushed_list.append(window_key)
+                already_pushed.add(window_key)
+        # Keep only the most recent 100 entries (ordered) to avoid unbounded growth
+        trimmed = already_pushed_list[-100:]
         await sheets.set_setting("pushed_window_match_ids", trimmed)
         logger.info("Window-completion home push sent to %d users", pushed)
     except Exception as e:
