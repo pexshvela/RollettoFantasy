@@ -1148,6 +1148,44 @@ async def cmd_recalculate(message: Message, state: FSMContext):
             logger.warning("Could not push home to %s: %s", uid, e)
 
 
+@router.message(Command("synctotals"))
+async def cmd_synctotals(message: Message, state: FSMContext):
+    """Recompute total_points for every user from player_match_points.
+    Use when home/leaderboard points differ from My Stats."""
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("🔄 Resyncing total points for all users...")
+    try:
+        sb = sheets._get_sb()
+        # Sum all player_match_points per user in one query
+        res = sb.table("player_match_points").select("telegram_id,points").execute()
+        totals: dict[int, int] = {}
+        for r in (res.data or []):
+            uid = int(r["telegram_id"])
+            totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
+        # Subtract transfer costs
+        transfer_costs = await sheets.get_transfer_costs_by_user(list(totals.keys()))
+        import asyncio
+        await asyncio.gather(*[
+            sheets.update_user(uid, total_points=totals[uid] - transfer_costs.get(uid, 0))
+            for uid in totals
+        ])
+        # Zero out users with no points entries
+        all_users = await sheets.get_all_users()
+        for u in all_users:
+            uid = int(u["telegram_id"])
+            if uid not in totals:
+                await sheets.update_user(uid, total_points=0)
+        await message.answer(
+            f"✅ Done. Synced totals for {len(totals)} users.\n"
+            f"Top 3 by pts: " +
+            ", ".join(f"{uid}={pts}" for uid, pts in
+                      sorted(totals.items(), key=lambda x: -x[1])[:3])
+        )
+    except Exception as e:
+        await message.answer(f"❌ Error: {e}")
+
+
 @router.message(Command("recalculate_all"))
 async def cmd_recalculate_all(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
