@@ -640,12 +640,14 @@ async def award_points(match: dict, bot=None):
         user_totals_batch[uid] = user_total
         updated += 1
 
-    # ── OPTIMIZATION: batch update total_points for all users in parallel ──────
-    # Fetch all player_match_points in one query, compute totals, batch update
+    # ── OPTIMIZATION: batch update total_points for all users ──────────────────
+    # Fetch all player_match_points in one query and recompute totals for every
+    # user who has any points recorded (not just those confirmed this GW), so
+    # total_points never drifts out of sync with My Stats.
     if user_totals_batch:
         all_pts_res = sheets._get_sb().table("player_match_points").select(
             "telegram_id,points"
-        ).in_("telegram_id", [str(u) for u in user_totals_batch.keys()]).execute()
+        ).execute()
         uid_totals: dict[int, int] = {}
         for r in (all_pts_res.data or []):
             u = int(r["telegram_id"])
@@ -654,14 +656,14 @@ async def award_points(match: dict, bot=None):
         # persist (total_points is recomputed from scratch here, so without this
         # the −4/−3 hits applied at transfer time would be silently wiped).
         transfer_costs = await sheets.get_transfer_costs_by_user(
-            list(user_totals_batch.keys())
+            list(uid_totals.keys())
         )
-        # Update all users in parallel
+        # Update ALL users who have any points, not just those in this batch
         await asyncio.gather(*[
             sheets.update_user(
                 u, total_points=uid_totals.get(u, 0) - transfer_costs.get(u, 0)
             )
-            for u in user_totals_batch.keys()
+            for u in uid_totals.keys()
         ])
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
