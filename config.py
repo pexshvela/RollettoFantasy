@@ -45,14 +45,14 @@ LEAGUE_IDS = {
     "wc":  {"league": 1,  "season": 2026},  # FIFA World Cup 2026
 }
 
-# ── World Cup-specific rules ───────────────────────────────────────────────
+# ── World Cup-specific rules (48-team format: 8 stages) ────────────────────
+# Stages: MD1-3 Group, MD4 Round of 32, MD5 Round of 16, MD6 QF, MD7 SF, MD8 Final
 # Per-matchday free-transfer allowance. -1 means unlimited.
-# MD1 unlimited, MD2=2, MD3=2, MD4 unlimited (knockouts start), MD5=4, MD6=5, MD7=6
-WC_TRANSFER_ALLOWANCE = {1: -1, 2: 2, 3: 2, 4: -1, 5: 4, 6: 5, 7: 6}
+WC_TRANSFER_ALLOWANCE = {1: -1, 2: 2, 3: 2, 4: -1, 5: 4, 6: 5, 7: 6, 8: -1}
 # Extra transfer cost for World Cup (official: -3, not -4)
 WC_EXTRA_TRANSFER_COST = 3
 # Dynamic max players per nation by matchday (group=3, then scales each knockout round)
-WC_MAX_PER_NATION = {1: 3, 2: 3, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8}
+WC_MAX_PER_NATION = {1: 3, 2: 3, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8}
 
 # Overall prize pool by final rank (USD). Ranks not listed get no prize.
 # Total: $1,500. Shown on the Overall leaderboard next to each rank.
