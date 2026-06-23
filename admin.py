@@ -1182,6 +1182,19 @@ async def cmd_synctotals(message: Message, state: FSMContext):
             ", ".join(f"{uid}={pts}" for uid, pts in
                       sorted(totals.items(), key=lambda x: -x[1])[:3])
         )
+        # Push updated home screen to every user
+        from registration import _push_home
+        pushed = 0
+        for u in all_users:
+            try:
+                lang = u.get("language", "en")
+                await _push_home(message.bot, int(u["telegram_id"]), u, lang)
+                pushed += 1
+                import asyncio as _asyncio
+                await _asyncio.sleep(0.05)
+            except Exception:
+                pass
+        await message.answer(f"📲 Home screen pushed to {pushed} users.")
     except Exception as e:
         await message.answer(f"❌ Error: {e}")
 
