@@ -344,12 +344,16 @@ def round_display_name(round_str: str) -> str:
         return f"Round {num}"
     # Knockout round — keep canonical names, don't mangle with .title()
     KNOCKOUT = {
+        "round of 32": "Round of 32",
         "round of 16": "Round of 16",
         "quarter-finals": "Quarter-finals",
+        "quarter finals": "Quarter-finals",
         "semi-finals": "Semi-finals",
+        "semi finals": "Semi-finals",
         "final": "Final",
         "3rd place final": "3rd Place Final",
         "third place final": "3rd Place Final",
+        "play-off for 3rd place": "3rd Place Final",
     }
     if s.strip() in KNOCKOUT:
         return KNOCKOUT[s.strip()]
@@ -357,10 +361,10 @@ def round_display_name(round_str: str) -> str:
 
 
 def wc_matchday(round_str: str) -> int | None:
-    """Map a World Cup round string to a matchday number 1-7.
+    """Map a World Cup round string to a matchday number 1-8 (48-team format).
     Group Stage - 1/2/3 -> 1/2/3
-    Round of 16 -> 4, Quarter-finals -> 5, Semi-finals -> 6,
-    Final / 3rd Place -> 7. Returns None if unrecognized."""
+    Round of 32 -> 4, Round of 16 -> 5, Quarter-finals -> 6,
+    Semi-finals -> 7, Final / 3rd Place -> 8. Returns None if unrecognized."""
     if not round_str:
         return None
     s = round_str.lower().strip()
@@ -369,12 +373,14 @@ def wc_matchday(round_str: str) -> int | None:
         if num in (1, 2, 3):
             return num
         return 1
-    if "16" in s:                      # Round of 16
+    if "32" in s:                      # Round of 32 (first knockout, 48-team WC)
         return 4
-    if "quarter" in s:                 # Quarter-finals
+    if "16" in s:                      # Round of 16
         return 5
-    if "semi" in s:                    # Semi-finals
+    if "quarter" in s:                 # Quarter-finals
         return 6
-    if "final" in s or "3rd" in s or "third" in s:  # Final / 3rd-place
+    if "semi" in s:                    # Semi-finals
         return 7
+    if "final" in s or "3rd" in s or "third" in s:  # Final / 3rd-place
+        return 8
     return None
