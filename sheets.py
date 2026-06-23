@@ -418,60 +418,75 @@ async def get_active_round() -> dict | None:
         tournament = await get_tournament()
 
         relevant_round = None
-        try:
-            sb = _get_sb()
-            now_ts = _dt.now(_tz.utc).timestamp()
-            # Look back up to 7 days so we don't lose a round mid-matchday.
-            seven_days_ago = now_ts - (7 * 24 * 3600)
-            res = sb.table("match_cache").select(
-                "match_id,round,kickoff_timestamp,status,points_awarded"
-            ).order("kickoff_timestamp").execute()
-            rows = res.data or []
 
-            # First preference: rounds that have at least one match that is
-            # upcoming OR recently kicked off (within 7 days) AND not yet
-            # fully awarded. This keeps us on the current round even when
-            # matches spread across several days (WC group stage).
-            active_by_round: dict[str, list[int]] = {}
-            future_by_round: dict[str, list[int]] = {}
-            for m in rows:
-                ts = int(m.get("kickoff_timestamp") or 0)
-                rnd = (m.get("round") or "").strip()
-                if not rnd:
-                    continue
-                awarded = m.get("points_awarded", False)
-                if ts >= now_ts:
-                    # Purely future match
-                    future_by_round.setdefault(rnd, []).append(ts)
-                elif ts >= seven_days_ago:
-                    # Recent match (within 7 days)
-                    active_by_round.setdefault(rnd, []).append(ts)
+        # ── For World Cup: trust the API's "current round" first. ──
+        # match_cache inference can get stuck on an old matchday if some old
+        # matches never got marked complete. The API knows the true current
+        # round, so prefer it and only fall back to match_cache if it fails.
+        if tournament == "wc":
+            try:
+                api_round = await _fapi.get_current_round(tournament)
+                if api_round:
+                    relevant_round = api_round
+            except Exception as e:
+                logger.warning("get_active_round API current-round failed: %s", e)
 
-            # Pick the earliest round that still has future or recent matches
-            # that haven't been fully processed, preferring rounds with future
-            # matches still to play.
-            candidate_rounds = set(active_by_round) | set(future_by_round)
-            if candidate_rounds:
-                def round_sort_key(rnd):
-                    import football_api as _fapi2
-                    md = _fapi2.wc_matchday(rnd)
-                    # For WC: prefer by matchday number; non-WC: by earliest kickoff
-                    if md:
-                        return (md, 0)
-                    kickoffs = (active_by_round.get(rnd, []) + future_by_round.get(rnd, []))
-                    return (999, min(kickoffs) if kickoffs else 0)
-                relevant_round = sorted(candidate_rounds, key=round_sort_key)[0]
-            else:
-                # No upcoming or recent matches — use most recent finished round
-                for m in reversed(rows):
+        if not relevant_round:
+            try:
+                sb = _get_sb()
+                now_ts = _dt.now(_tz.utc).timestamp()
+                # Look back up to 7 days so we don't lose a round mid-matchday.
+                seven_days_ago = now_ts - (7 * 24 * 3600)
+                res = sb.table("match_cache").select(
+                    "match_id,round,kickoff_timestamp,status,points_awarded"
+                ).order("kickoff_timestamp").execute()
+                rows = res.data or []
+
+                # First preference: rounds that have at least one match that is
+                # upcoming OR recently kicked off (within 7 days) AND not yet
+                # fully awarded. This keeps us on the current round even when
+                # matches spread across several days (WC group stage).
+                active_by_round: dict[str, list[int]] = {}
+                future_by_round: dict[str, list[int]] = {}
+                for m in rows:
+                    ts = int(m.get("kickoff_timestamp") or 0)
                     rnd = (m.get("round") or "").strip()
-                    if rnd:
-                        relevant_round = rnd
-                        break
-        except Exception as inner:
-            logger.warning("get_active_round match_cache lookup failed: %s", inner)
+                    if not rnd:
+                        continue
+                    if ts >= now_ts:
+                        future_by_round.setdefault(rnd, []).append(ts)
+                    elif ts >= seven_days_ago:
+                        active_by_round.setdefault(rnd, []).append(ts)
 
-        # Last resort: ask API (note: API can be laggy)
+                # Prefer rounds that still have FUTURE matches to play; among
+                # those pick the earliest matchday. Only if no round has future
+                # matches do we consider recent (within 7d) rounds.
+                if future_by_round:
+                    candidate_rounds = set(future_by_round)
+                elif active_by_round:
+                    candidate_rounds = set(active_by_round)
+                else:
+                    candidate_rounds = set()
+
+                if candidate_rounds:
+                    def round_sort_key(rnd):
+                        import football_api as _fapi2
+                        md = _fapi2.wc_matchday(rnd)
+                        if md:
+                            return (md, 0)
+                        kickoffs = (active_by_round.get(rnd, []) + future_by_round.get(rnd, []))
+                        return (999, min(kickoffs) if kickoffs else 0)
+                    relevant_round = sorted(candidate_rounds, key=round_sort_key)[0]
+                else:
+                    for m in reversed(rows):
+                        rnd = (m.get("round") or "").strip()
+                        if rnd:
+                            relevant_round = rnd
+                            break
+            except Exception as inner:
+                logger.warning("get_active_round match_cache lookup failed: %s", inner)
+
+        # Last resort: ask API (note: API can be laggy) — for non-WC tournaments
         if not relevant_round:
             relevant_round = await _fapi.get_current_round(tournament)
 
