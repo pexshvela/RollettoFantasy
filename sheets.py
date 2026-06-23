@@ -308,8 +308,8 @@ async def log_transfer(telegram_id: int, player_out: str, player_in: str,
             "telegram_id":  telegram_id,
             "player_out":   player_out,
             "player_in":    player_in,
-            "gameweek_id":  gameweek_id,
-            "cost_pts":     cost_pts,
+            "matchday":     gameweek_id,
+            "free_or_cost": cost_pts,
         }).execute()
     except Exception as e:
         logger.error("log_transfer error: %s", e)
@@ -319,7 +319,7 @@ async def count_transfers_this_gw(telegram_id: int, gameweek_id: int) -> int:
     try:
         res = _get_sb().table("transfers").select("id").eq(
             "telegram_id", telegram_id
-        ).eq("gameweek_id", gameweek_id).execute()
+        ).eq("matchday", gameweek_id).execute()
         return len(res.data or [])
     except Exception as e:
         logger.error("count_transfers error: %s", e)
@@ -335,7 +335,7 @@ async def count_transfers_since(telegram_id: int, since_iso: str) -> int:
     try:
         res = _get_sb().table("transfers").select("id").eq(
             "telegram_id", telegram_id
-        ).gte("created_at", since_iso).execute()
+        ).gte("timestamp", since_iso).execute()
         return len(res.data or [])
     except Exception as e:
         logger.error("count_transfers_since error: %s", e)
@@ -369,12 +369,12 @@ async def get_transfer_costs_by_user(telegram_ids: list) -> dict[int, int]:
         return {}
     try:
         res = _get_sb().table("transfers").select(
-            "telegram_id,cost_pts"
+            "telegram_id,free_or_cost"
         ).in_("telegram_id", [str(u) for u in telegram_ids]).execute()
         costs: dict[int, int] = {}
         for r in (res.data or []):
             uid = int(r["telegram_id"])
-            costs[uid] = costs.get(uid, 0) + int(r.get("cost_pts") or 0)
+            costs[uid] = costs.get(uid, 0) + int(r.get("free_or_cost") or 0)
         return costs
     except Exception as e:
         logger.error("get_transfer_costs_by_user error: %s", e)
@@ -420,32 +420,49 @@ async def get_active_round() -> dict | None:
         relevant_round = None
         try:
             sb = _get_sb()
-            twelve_h_ago = (_dt.now(_tz.utc) - _td(hours=12)).timestamp()
+            now_ts = _dt.now(_tz.utc).timestamp()
+            # Look back up to 7 days so we don't lose a round mid-matchday.
+            seven_days_ago = now_ts - (7 * 24 * 3600)
             res = sb.table("match_cache").select(
                 "match_id,round,kickoff_timestamp,status,points_awarded"
             ).order("kickoff_timestamp").execute()
             rows = res.data or []
 
-            # Count matches per round that are upcoming (or recent within 12h)
-            upcoming_by_round: dict[str, list[int]] = {}
+            # First preference: rounds that have at least one match that is
+            # upcoming OR recently kicked off (within 7 days) AND not yet
+            # fully awarded. This keeps us on the current round even when
+            # matches spread across several days (WC group stage).
+            active_by_round: dict[str, list[int]] = {}
+            future_by_round: dict[str, list[int]] = {}
             for m in rows:
-                ts = m.get("kickoff_timestamp") or 0
-                if ts < twelve_h_ago:
-                    continue
+                ts = int(m.get("kickoff_timestamp") or 0)
                 rnd = (m.get("round") or "").strip()
                 if not rnd:
                     continue
-                upcoming_by_round.setdefault(rnd, []).append(ts)
+                awarded = m.get("points_awarded", False)
+                if ts >= now_ts:
+                    # Purely future match
+                    future_by_round.setdefault(rnd, []).append(ts)
+                elif ts >= seven_days_ago:
+                    # Recent match (within 7 days)
+                    active_by_round.setdefault(rnd, []).append(ts)
 
-            if upcoming_by_round:
-                # Pick the round with the most upcoming matches.
-                # On tie, pick the one with the earliest kickoff.
-                def score(item):
-                    rnd, kickoffs = item
-                    return (-len(kickoffs), min(kickoffs))
-                relevant_round = sorted(upcoming_by_round.items(), key=score)[0][0]
+            # Pick the earliest round that still has future or recent matches
+            # that haven't been fully processed, preferring rounds with future
+            # matches still to play.
+            candidate_rounds = set(active_by_round) | set(future_by_round)
+            if candidate_rounds:
+                def round_sort_key(rnd):
+                    import football_api as _fapi2
+                    md = _fapi2.wc_matchday(rnd)
+                    # For WC: prefer by matchday number; non-WC: by earliest kickoff
+                    if md:
+                        return (md, 0)
+                    kickoffs = (active_by_round.get(rnd, []) + future_by_round.get(rnd, []))
+                    return (999, min(kickoffs) if kickoffs else 0)
+                relevant_round = sorted(candidate_rounds, key=round_sort_key)[0]
             else:
-                # No upcoming matches — use most recent finished match's round
+                # No upcoming or recent matches — use most recent finished round
                 for m in reversed(rows):
                     rnd = (m.get("round") or "").strip()
                     if rnd:
