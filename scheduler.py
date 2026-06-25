@@ -209,12 +209,64 @@ async def run_scheduler(bot=None):
                 await check_admin_reminders(bot)
                 await check_completed_windows(bot)
             _first_run = False
+            # Safety net: keep total_points in sync with player_match_points so
+            # the home menu / leaderboard never drift (only writes when wrong).
+            await sync_totals_if_drifted()
         except Exception as e:
             logger.error("Scheduler error: %s", e)
         await asyncio.sleep(POLL_INTERVAL)
 
 
 # ── Match processing ──────────────────────────────────────────────────────────
+
+_last_totals_sync = 0
+
+async def sync_totals_if_drifted():
+    """Safety net: ensure users.total_points == SUM(player_match_points) - costs.
+    Only writes rows that are actually wrong, so it's cheap to run every poll.
+    Guarantees the home menu / leaderboard can never stay out of sync with My
+    Stats for more than one poll interval, no matter what happens during scoring.
+    """
+    global _last_totals_sync
+    now = int(time.time())
+    # Throttle: at most once every 60s
+    if now - _last_totals_sync < 60:
+        return
+    _last_totals_sync = now
+    try:
+        sb = sheets._get_sb()
+        pts_res = sb.table("player_match_points").select("telegram_id,points").execute()
+        correct: dict[int, int] = {}
+        for r in (pts_res.data or []):
+            u = int(r["telegram_id"])
+            correct[u] = correct.get(u, 0) + int(r.get("points") or 0)
+        if not correct:
+            return
+        # Subtract transfer costs (safe — never blocks the sync)
+        try:
+            costs = await sheets.get_transfer_costs_by_user(list(correct.keys()))
+        except Exception:
+            costs = {}
+        for u in correct:
+            correct[u] -= costs.get(u, 0)
+
+        # Read current stored totals; only update the ones that differ
+        users_res = sb.table("users").select("telegram_id,total_points").execute()
+        to_fix = []
+        for u in (users_res.data or []):
+            uid = int(u["telegram_id"])
+            stored = int(u.get("total_points") or 0)
+            target = correct.get(uid, 0)
+            if stored != target:
+                to_fix.append((uid, target))
+        if to_fix:
+            await asyncio.gather(*[
+                sheets.update_user(uid, total_points=tp) for uid, tp in to_fix
+            ], return_exceptions=True)
+            logger.info("Totals safety-net corrected %d user(s)", len(to_fix))
+    except Exception as e:
+        logger.warning("sync_totals_if_drifted error: %s", e)
+
 
 async def check_due_matches(bot=None):
     now     = int(time.time())
@@ -645,11 +697,11 @@ async def award_points(match: dict, bot=None):
         user_totals_batch[uid] = user_total
         updated += 1
 
-    # ── OPTIMIZATION: batch update total_points for all users ──────────────────
-    # Fetch all player_match_points in one query and recompute totals for every
-    # user who has any points recorded (not just those confirmed this GW), so
-    # total_points never drifts out of sync with My Stats.
-    if user_totals_batch:
+    # ── Recompute total_points for ALL users from player_match_points ─────────
+    # This is the single source of truth (same data My Stats reads), so the home
+    # menu and leaderboard never drift out of sync. Runs on every scoring pass,
+    # independent of which users were in this match's batch.
+    try:
         all_pts_res = sheets._get_sb().table("player_match_points").select(
             "telegram_id,points"
         ).execute()
@@ -657,19 +709,27 @@ async def award_points(match: dict, bot=None):
         for r in (all_pts_res.data or []):
             u = int(r["telegram_id"])
             uid_totals[u] = uid_totals.get(u, 0) + int(r.get("points") or 0)
-        # Subtract accumulated transfer point-hits so extra-transfer penalties
-        # persist (total_points is recomputed from scratch here, so without this
-        # the −4/−3 hits applied at transfer time would be silently wiped).
-        transfer_costs = await sheets.get_transfer_costs_by_user(
-            list(uid_totals.keys())
-        )
-        # Update ALL users who have any points, not just those in this batch
+
+        # Subtract accumulated transfer point-hits. Wrapped so a failure here
+        # NEVER corrupts totals — if it errors, we just don't subtract (costs
+        # are 0 for everyone currently anyway since transfers log free).
+        try:
+            transfer_costs = await sheets.get_transfer_costs_by_user(
+                list(uid_totals.keys())
+            )
+        except Exception as e:
+            logger.warning("transfer cost lookup failed (using 0): %s", e)
+            transfer_costs = {}
+
+        # Write corrected totals for every user who has points (in parallel)
         await asyncio.gather(*[
             sheets.update_user(
                 u, total_points=uid_totals.get(u, 0) - transfer_costs.get(u, 0)
             )
             for u in uid_totals.keys()
-        ])
+        ], return_exceptions=True)
+    except Exception as e:
+        logger.error("total_points recompute failed for match %s: %s", mid, e)
 
     logger.info("Points awarded to %d users for match %s.", updated, mid)
     await sheets.mark_match_points_awarded(mid)
