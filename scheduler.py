@@ -235,11 +235,24 @@ async def sync_totals_if_drifted():
     _last_totals_sync = now
     try:
         sb = sheets._get_sb()
-        pts_res = sb.table("player_match_points").select("telegram_id,points").execute()
+        # IMPORTANT: Supabase caps a query at 1000 rows by default. With more
+        # than 1000 player_match_points rows, a single .select() silently
+        # returns a PARTIAL set, producing a too-low total. Page through ALL
+        # rows so the sum is complete.
         correct: dict[int, int] = {}
-        for r in (pts_res.data or []):
-            u = int(r["telegram_id"])
-            correct[u] = correct.get(u, 0) + int(r.get("points") or 0)
+        page = 0
+        PAGE = 1000
+        while True:
+            chunk = sb.table("player_match_points").select(
+                "telegram_id,points"
+            ).range(page * PAGE, page * PAGE + PAGE - 1).execute()
+            rows = chunk.data or []
+            for r in rows:
+                u = int(r["telegram_id"])
+                correct[u] = correct.get(u, 0) + int(r.get("points") or 0)
+            if len(rows) < PAGE:
+                break
+            page += 1
         if not correct:
             return
         # Subtract transfer costs (safe — never blocks the sync)
@@ -711,13 +724,23 @@ async def award_points(match: dict, bot=None):
     # menu and leaderboard never drift out of sync. Runs on every scoring pass,
     # independent of which users were in this match's batch.
     try:
-        all_pts_res = sheets._get_sb().table("player_match_points").select(
-            "telegram_id,points"
-        ).execute()
+        # Page through ALL player_match_points rows — Supabase caps a single
+        # query at 1000 rows, which would otherwise give a partial (too-low) sum
+        # once the table grows past 1000 rows.
         uid_totals: dict[int, int] = {}
-        for r in (all_pts_res.data or []):
-            u = int(r["telegram_id"])
-            uid_totals[u] = uid_totals.get(u, 0) + int(r.get("points") or 0)
+        _page = 0
+        _PAGE = 1000
+        while True:
+            _chunk = sheets._get_sb().table("player_match_points").select(
+                "telegram_id,points"
+            ).range(_page * _PAGE, _page * _PAGE + _PAGE - 1).execute()
+            _rows = _chunk.data or []
+            for r in _rows:
+                u = int(r["telegram_id"])
+                uid_totals[u] = uid_totals.get(u, 0) + int(r.get("points") or 0)
+            if len(_rows) < _PAGE:
+                break
+            _page += 1
 
         # Subtract accumulated transfer point-hits. Wrapped so a failure here
         # NEVER corrupts totals — if it errors, we just don't subtract (costs
