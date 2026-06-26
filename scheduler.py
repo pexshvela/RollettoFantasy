@@ -259,9 +259,22 @@ async def sync_totals_if_drifted():
             target = correct.get(uid, 0)
             if stored != target:
                 to_fix.append((uid, target))
-        if to_fix:
-            await sheets.bulk_update_total_points(dict(to_fix))
-            logger.info("Totals safety-net corrected %d user(s)", len(to_fix))
+
+        if not to_fix:
+            return
+
+        # Update each drifted user with a direct, reliable .eq() UPDATE.
+        # (Avoids the .in_() bulk path which can silently match zero rows.)
+        fixed = 0
+        for uid, target in to_fix:
+            try:
+                sb.table("users").update(
+                    {"total_points": target}
+                ).eq("telegram_id", uid).execute()
+                fixed += 1
+            except Exception as e:
+                logger.error("safety-net update failed for %s: %s", uid, e)
+        logger.info("Totals safety-net corrected %d/%d user(s)", fixed, len(to_fix))
     except Exception as e:
         logger.warning("sync_totals_if_drifted error: %s", e)
 
@@ -717,13 +730,30 @@ async def award_points(match: dict, bot=None):
             logger.warning("transfer cost lookup failed (using 0): %s", e)
             transfer_costs = {}
 
-        # Write corrected totals for every user who has points, in as few
-        # requests as possible (grouped by score) to avoid a rate-limit burst.
+        # Write corrected totals. Use direct .eq() updates per user — reliable
+        # and the count is bounded by users-with-points. Runs sequentially to
+        # avoid a request burst.
         final_totals = {
             u: uid_totals.get(u, 0) - transfer_costs.get(u, 0)
             for u in uid_totals.keys()
         }
-        await sheets.bulk_update_total_points(final_totals)
+        # Only write users whose stored total differs, to keep it light.
+        cur_res = sheets._get_sb().table("users").select(
+            "telegram_id,total_points"
+        ).execute()
+        stored_map = {int(r["telegram_id"]): int(r.get("total_points") or 0)
+                      for r in (cur_res.data or [])}
+        written = 0
+        for u, tp in final_totals.items():
+            if stored_map.get(u) != tp:
+                try:
+                    sheets._get_sb().table("users").update(
+                        {"total_points": tp}
+                    ).eq("telegram_id", u).execute()
+                    written += 1
+                except Exception as e:
+                    logger.error("total update failed for %s: %s", u, e)
+        logger.info("Recomputed total_points: %d user(s) updated", written)
     except Exception as e:
         logger.error("total_points recompute failed for match %s: %s", mid, e)
 
