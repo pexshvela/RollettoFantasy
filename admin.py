@@ -1158,12 +1158,22 @@ async def cmd_synctotals(message: Message, state: FSMContext):
     await message.answer("🔄 Resyncing total points for all users...")
     try:
         sb = sheets._get_sb()
-        # Sum all player_match_points per user in one query
-        res = sb.table("player_match_points").select("telegram_id,points").execute()
+        # Sum all player_match_points per user — page through ALL rows since
+        # Supabase caps a single query at 1000 rows (we have more than that).
         totals: dict[int, int] = {}
-        for r in (res.data or []):
-            uid = int(r["telegram_id"])
-            totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
+        _page = 0
+        _PAGE = 1000
+        while True:
+            _chunk = sb.table("player_match_points").select(
+                "telegram_id,points"
+            ).range(_page * _PAGE, _page * _PAGE + _PAGE - 1).execute()
+            _rows = _chunk.data or []
+            for r in _rows:
+                uid = int(r["telegram_id"])
+                totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
+            if len(_rows) < _PAGE:
+                break
+            _page += 1
         # Subtract transfer costs
         transfer_costs = await sheets.get_transfer_costs_by_user(list(totals.keys()))
         import asyncio
