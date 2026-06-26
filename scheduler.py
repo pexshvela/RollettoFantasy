@@ -260,9 +260,7 @@ async def sync_totals_if_drifted():
             if stored != target:
                 to_fix.append((uid, target))
         if to_fix:
-            await asyncio.gather(*[
-                sheets.update_user(uid, total_points=tp) for uid, tp in to_fix
-            ], return_exceptions=True)
+            await sheets.bulk_update_total_points(dict(to_fix))
             logger.info("Totals safety-net corrected %d user(s)", len(to_fix))
     except Exception as e:
         logger.warning("sync_totals_if_drifted error: %s", e)
@@ -642,7 +640,7 @@ async def award_points(match: dict, bot=None):
         captain_id = squad_snapshot.get("captain") or user_row.get("captain", "")
         formation  = squad_snapshot.get("formation") or user_row.get("formation", "4-3-3")
 
-        logger.info("User %s: formation=%s captain=%s snap_keys=%s",
+        logger.debug("User %s: formation=%s captain=%s snap_keys=%s",
                     uid, formation, captain_id, list(squad_snapshot.keys())[:5])
 
         prev_total = 0  # Will be populated if needed
@@ -650,7 +648,7 @@ async def award_points(match: dict, bot=None):
         # Get starter slots using formation-aware helper
         from helpers import get_starter_slots
         starter_slots = get_starter_slots(formation)
-        logger.info("User %s: starter_slots=%s", uid, starter_slots)
+        logger.debug("User %s: starter_slots=%s", uid, starter_slots)
         user_total    = 0
 
         # Collect points rows for this user — batch upsert below
@@ -661,12 +659,10 @@ async def award_points(match: dict, bot=None):
                 logger.debug("Slot %s is empty", slot)
                 continue
             if pid not in bot_player_stats:
-                from players import get_player as _gp
-                p = _gp(pid)
-                logger.warning("Slot %s player '%s' (id=%s) not in bot_player_stats",
-                                slot, p["name"] if p else "?", pid)
+                # Expected for any player whose team didn't play this match.
+                logger.debug("Slot %s player id=%s not in this match's stats", slot, pid)
                 continue
-            logger.info("Scoring slot %s: %s", slot, pid)
+            logger.debug("Scoring slot %s: %s", slot, pid)
 
             stats      = bot_player_stats[pid]
             is_captain = pid == captain_id
@@ -721,13 +717,13 @@ async def award_points(match: dict, bot=None):
             logger.warning("transfer cost lookup failed (using 0): %s", e)
             transfer_costs = {}
 
-        # Write corrected totals for every user who has points (in parallel)
-        await asyncio.gather(*[
-            sheets.update_user(
-                u, total_points=uid_totals.get(u, 0) - transfer_costs.get(u, 0)
-            )
+        # Write corrected totals for every user who has points, in as few
+        # requests as possible (grouped by score) to avoid a rate-limit burst.
+        final_totals = {
+            u: uid_totals.get(u, 0) - transfer_costs.get(u, 0)
             for u in uid_totals.keys()
-        ], return_exceptions=True)
+        }
+        await sheets.bulk_update_total_points(final_totals)
     except Exception as e:
         logger.error("total_points recompute failed for match %s: %s", mid, e)
 
