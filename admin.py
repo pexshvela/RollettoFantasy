@@ -131,6 +131,15 @@ Use after a major fix. Takes longer than a single gameweek recalculation.</i>
 <i>Force re-fetch a match result from the API.
 Use if a match is stuck as "upcoming" or "scheduled" after it ended.
 Example: /recheck 1540842</i>
+
+/fixresults
+<i>Auto-heal ALL matches stuck as "upcoming" (finished but never scored) in the
+last 30 days. Re-fetches each and scores it if final. The scheduler does this
+automatically too — this is the manual trigger.</i>
+
+/synctotals
+<i>Recompute every user's total points from scratch (home/leaderboard).
+Use if the menu total ever disagrees with My Stats.</i>
 """
 
 
@@ -1158,22 +1167,10 @@ async def cmd_synctotals(message: Message, state: FSMContext):
     await message.answer("🔄 Resyncing total points for all users...")
     try:
         sb = sheets._get_sb()
-        # Sum all player_match_points per user — page through ALL rows since
-        # Supabase caps a single query at 1000 rows (we have more than that).
-        totals: dict[int, int] = {}
-        _page = 0
-        _PAGE = 1000
-        while True:
-            _chunk = sb.table("player_match_points").select(
-                "telegram_id,points"
-            ).range(_page * _PAGE, _page * _PAGE + _PAGE - 1).execute()
-            _rows = _chunk.data or []
-            for r in _rows:
-                uid = int(r["telegram_id"])
-                totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
-            if len(_rows) < _PAGE:
-                break
-            _page += 1
+        # Sum all player_match_points per user via the shared, stable-ordered
+        # paginator. (The old inline paging here had no .order(), so manual
+        # /synctotals fixes drifted again on the next scheduler poll.)
+        totals: dict[int, int] = await sheets.sum_all_player_points()
         # Subtract transfer costs
         transfer_costs = await sheets.get_transfer_costs_by_user(list(totals.keys()))
         import asyncio
@@ -1207,6 +1204,79 @@ async def cmd_synctotals(message: Message, state: FSMContext):
                 pass
         await message.answer(f"📲 Home screen pushed to {pushed} users.")
     except Exception as e:
+        await message.answer(f"❌ Error: {e}")
+
+
+@router.message(Command("fixresults"))
+async def cmd_fixresults(message: Message, state: FSMContext):
+    """Heal matches stuck under 'Upcoming' (finished but never scored).
+    Re-fetches every non-final cached match from the last 30 days and scores it
+    if the API now reports it final. Idempotent — safe to run anytime. The
+    scheduler also does this automatically every poll; this is the manual trigger."""
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("🔄 Checking for finished matches stuck as 'Upcoming'...")
+    try:
+        import football_api as _fapi
+        from scheduler import award_points
+        from datetime import date, timedelta
+        sb = sheets._get_sb()
+        cutoff = (date.today() - timedelta(days=30)).isoformat()
+        rows = []
+        _page = 0
+        _PAGE = 1000
+        while True:
+            chunk = (sb.table("match_cache").select(
+                "match_id,status,match_date,kickoff_timestamp"
+            ).neq("status", "final").gte("match_date", cutoff)
+             .order("kickoff_timestamp").order("match_id")
+             .range(_page * _PAGE, _page * _PAGE + _PAGE - 1).execute())
+            crows = chunk.data or []
+            rows.extend(crows)
+            if len(crows) < _PAGE:
+                break
+            _page += 1
+        if not rows:
+            await message.answer("✅ No stuck matches found. Everything is up to date.")
+            return
+
+        healed = 0
+        still_pending = 0
+        for m in rows:
+            mid = str(m.get("match_id") or "")
+            if not mid:
+                continue
+            full = await _fapi.fetch_full_match(mid)
+            if not full or full.get("status") != "final":
+                still_pending += 1
+                continue
+            full["points_awarded"] = False
+            await sheets.save_match_cache(full)
+            await award_points(full, None)   # bot=None → no broadcast spam
+            healed += 1
+
+        await message.answer(
+            f"✅ Done.\n"
+            f"Scored (were stuck): {healed}\n"
+            f"Still not final per API (postponed/upcoming): {still_pending}"
+        )
+
+        if healed:
+            from registration import _push_home
+            users = await sheets.get_all_users()
+            pushed = 0
+            for u in users:
+                try:
+                    lang = u.get("language", "en")
+                    await _push_home(message.bot, int(u["telegram_id"]), u, lang)
+                    pushed += 1
+                    import asyncio as _a
+                    await _a.sleep(0.05)
+                except Exception:
+                    pass
+            await message.answer(f"📲 Home refreshed for {pushed} users.")
+    except Exception as e:
+        logger.exception("fixresults failed")
         await message.answer(f"❌ Error: {e}")
 
 
