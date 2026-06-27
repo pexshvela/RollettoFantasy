@@ -174,9 +174,23 @@ async def get_user_by_rolletto_username(username: str) -> dict | None:
 
 
 async def get_all_users() -> list[dict]:
+    """All users. Pages through results so it never silently stops at the
+    Supabase 1000-row default cap (scoring/broadcasts iterate this list)."""
     try:
-        res = _get_sb().table("users").select("*").execute()
-        return res.data or []
+        sb = _get_sb()
+        out: list[dict] = []
+        page = 0
+        PAGE = 1000
+        while True:
+            chunk = sb.table("users").select("*").order(
+                "telegram_id"
+            ).range(page * PAGE, page * PAGE + PAGE - 1).execute()
+            rows = chunk.data or []
+            out.extend(rows)
+            if len(rows) < PAGE:
+                break
+            page += 1
+        return out
     except Exception as e:
         logger.error("get_all_users error: %s", e)
         return []
@@ -362,23 +376,34 @@ async def count_transfers_used(telegram_id: int, gameweek_id: int) -> int:
         return await count_transfers_this_gw(telegram_id, gameweek_id)
 
 
-async def get_transfer_costs_by_user(telegram_ids: list) -> dict[int, int]:
+async def get_transfer_costs_by_user(telegram_ids: list = None) -> dict[int, int]:
     """Return {telegram_id: total point cost of all their transfers}.
-    Used by the scoring recompute so extra-transfer hits persist in total_points."""
-    if not telegram_ids:
-        return {}
+    Used by the scoring recompute so extra-transfer hits persist in total_points.
+
+    Pages the whole transfers table ordered by id (stable) instead of using
+    .in_() with stringified ids — the old approach could silently truncate at the
+    1000-row cap and mismatch a bigint column, under-subtracting costs. Returns
+    costs for ALL users; callers index with .get(uid, 0)."""
+    costs: dict[int, int] = {}
     try:
-        res = _get_sb().table("transfers").select(
-            "telegram_id,free_or_cost"
-        ).in_("telegram_id", [str(u) for u in telegram_ids]).execute()
-        costs: dict[int, int] = {}
-        for r in (res.data or []):
-            uid = int(r["telegram_id"])
-            costs[uid] = costs.get(uid, 0) + int(r.get("free_or_cost") or 0)
+        sb = _get_sb()
+        page = 0
+        PAGE = 1000
+        while True:
+            chunk = sb.table("transfers").select(
+                "telegram_id,free_or_cost"
+            ).order("id").range(page * PAGE, page * PAGE + PAGE - 1).execute()
+            rows = chunk.data or []
+            for r in rows:
+                uid = int(r["telegram_id"])
+                costs[uid] = costs.get(uid, 0) + int(r.get("free_or_cost") or 0)
+            if len(rows) < PAGE:
+                break
+            page += 1
         return costs
     except Exception as e:
         logger.error("get_transfer_costs_by_user error: %s", e)
-        return {}
+        return costs
 
 
 # ── Gameweeks ─────────────────────────────────────────────────────────────────
@@ -643,6 +668,40 @@ async def get_unprocessed_matches() -> list[dict]:
         return []
 
 
+async def get_stuck_matches(days: int = 30) -> list[dict]:
+    """'Zombie' matches: points_awarded=True but cached status is NOT final.
+
+    These were silenced (marked awarded) without ever being scored/updated, so
+    they still show as 'Upcoming' with a 0-0 score and awarded nobody points.
+    get_unprocessed_matches() can't see them (points_awarded is True), so the
+    scheduler self-heal uses this to re-fetch and score them. Restricted to the
+    last `days` so we don't rescan ancient history every poll."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    try:
+        sb = _get_sb()
+        out: list[dict] = []
+        page = 0
+        PAGE = 1000
+        while True:
+            chunk = (sb.table("match_cache").select(
+                "match_id,home_team,away_team,home_score,away_score,"
+                "status,match_date,kickoff_timestamp,last_checked,points_awarded"
+            ).eq("points_awarded", True).neq("status", "final").gte(
+                "match_date", cutoff
+            ).order("kickoff_timestamp").order("match_id")
+             .range(page * PAGE, page * PAGE + PAGE - 1).execute())
+            rows = chunk.data or []
+            out.extend(rows)
+            if len(rows) < PAGE:
+                break
+            page += 1
+        return out
+    except Exception as e:
+        logger.error("get_stuck_matches error: %s", e)
+        return []
+
+
 async def get_upcoming_matches(days: int = 7) -> list[dict]:
     from datetime import date, timedelta
     cutoff = (date.today() + timedelta(days=days)).isoformat()
@@ -765,6 +824,41 @@ async def get_gameweek_points(telegram_id: int, gameweek_id: int) -> int:
         return 0
 
 
+async def sum_all_player_points() -> dict[int, int]:
+    """Sum points per user across the ENTIRE player_match_points table.
+
+    CRITICAL: pages with a STABLE, UNIQUE ordering — the upsert conflict key
+    (telegram_id, player_id, match_id) — so .range() can never skip or duplicate
+    rows across pages, even while a scoring pass is upserting new rows
+    concurrently. Without this stable order, the page window shifts and the sum
+    comes out too low, which then overwrites correct users.total_points. This is
+    the single source of truth for the home menu / leaderboard totals.
+
+    NOTE: must be three chained .order() calls (not one comma string), otherwise
+    PostgREST only applies the first column and the order is not unique."""
+    totals: dict[int, int] = {}
+    try:
+        sb = _get_sb()
+        page = 0
+        PAGE = 1000
+        while True:
+            chunk = (sb.table("player_match_points")
+                       .select("telegram_id,points")
+                       .order("telegram_id").order("player_id").order("match_id")
+                       .range(page * PAGE, page * PAGE + PAGE - 1)
+                       .execute())
+            rows = chunk.data or []
+            for r in rows:
+                u = int(r["telegram_id"])
+                totals[u] = totals.get(u, 0) + int(r.get("points") or 0)
+            if len(rows) < PAGE:
+                break
+            page += 1
+    except Exception as e:
+        logger.error("sum_all_player_points error: %s", e)
+    return totals
+
+
 # ── Leaderboard ───────────────────────────────────────────────────────────────
 
 async def get_overall_rank(telegram_id: int) -> tuple[int, int]:
@@ -841,13 +935,23 @@ async def get_round_leaderboard(round_str: str, limit: int = 20) -> list[dict]:
         if not match_ids:
             return []
 
-        pts_res = sb.table("player_match_points").select(
-            "telegram_id,points"
-        ).in_("match_id", match_ids).execute()
         totals: dict[int, int] = {}
-        for r in (pts_res.data or []):
-            uid = int(r["telegram_id"])
-            totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
+        page = 0
+        PAGE = 1000
+        while True:
+            pts_res = (sb.table("player_match_points")
+                         .select("telegram_id,points")
+                         .in_("match_id", match_ids)
+                         .order("telegram_id").order("player_id").order("match_id")
+                         .range(page * PAGE, page * PAGE + PAGE - 1)
+                         .execute())
+            rows = pts_res.data or []
+            for r in rows:
+                uid = int(r["telegram_id"])
+                totals[uid] = totals.get(uid, 0) + int(r.get("points") or 0)
+            if len(rows) < PAGE:
+                break
+            page += 1
 
         users_res = sb.table("users").select(
             "telegram_id,rolletto_username,tg_username,username"
@@ -869,16 +973,26 @@ async def get_round_leaderboard(round_str: str, limit: int = 20) -> list[dict]:
 
 async def get_gameweek_leaderboard(gameweek_id: int, limit: int = 20) -> list[dict]:
     try:
-        # Get all points for this gameweek
-        res = _get_sb().table("player_match_points").select(
-            "telegram_id,points"
-        ).eq("gameweek_id", gameweek_id).execute()
-
-        # Aggregate per user
+        sb = _get_sb()
+        # Get all points for this gameweek — paged with a stable unique order so
+        # the 1000-row cap can't truncate the aggregate.
         totals: dict[int, int] = {}
-        for r in (res.data or []):
-            uid = r["telegram_id"]
-            totals[uid] = totals.get(uid, 0) + (r["points"] or 0)
+        page = 0
+        PAGE = 1000
+        while True:
+            res = (sb.table("player_match_points")
+                     .select("telegram_id,points")
+                     .eq("gameweek_id", gameweek_id)
+                     .order("telegram_id").order("player_id").order("match_id")
+                     .range(page * PAGE, page * PAGE + PAGE - 1)
+                     .execute())
+            rows = res.data or []
+            for r in rows:
+                uid = int(r["telegram_id"])
+                totals[uid] = totals.get(uid, 0) + (r["points"] or 0)
+            if len(rows) < PAGE:
+                break
+            page += 1
 
         # Fetch all users in one query to avoid N+1
         all_users_res = _get_sb().table("users").select(
