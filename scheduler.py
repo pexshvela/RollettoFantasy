@@ -38,6 +38,20 @@ def _norm(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().strip()
 
 
+def _kickoff_from_date(date_str: str) -> int:
+    """Best-effort unix timestamp (12:00 UTC) from a 'YYYY-MM-DD' match_date.
+    Used as a fallback when a cached match has no kickoff_timestamp so it isn't
+    skipped forever. Returns 0 if the date can't be parsed."""
+    try:
+        d = (date_str or "")[:10]
+        if not d:
+            return 0
+        dt = datetime.strptime(d, "%Y-%m-%d").replace(hour=12, tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        return 0
+
+
 async def _sync_missing_matches():
     """On startup: ensure all matches in the next 14 days are in match_cache.
     Uses date-range API call instead of round-based, because API 'current round'
@@ -202,6 +216,8 @@ async def run_scheduler(bot=None):
             await sheets.set_setting("scheduler_heartbeat", str(int(time.time())))
 
             await check_due_matches(bot)
+            # Heal any matches stuck under "Upcoming" / silenced-without-scoring
+            await recheck_stuck_matches(bot)
             if not _first_run:
                 # Skip notifications on startup to avoid re-sending after redeploy
                 await check_deadline_notifications(bot)
@@ -235,24 +251,11 @@ async def sync_totals_if_drifted():
     _last_totals_sync = now
     try:
         sb = sheets._get_sb()
-        # IMPORTANT: Supabase caps a query at 1000 rows by default. With more
-        # than 1000 player_match_points rows, a single .select() silently
-        # returns a PARTIAL set, producing a too-low total. Page through ALL
-        # rows so the sum is complete.
-        correct: dict[int, int] = {}
-        page = 0
-        PAGE = 1000
-        while True:
-            chunk = sb.table("player_match_points").select(
-                "telegram_id,points"
-            ).range(page * PAGE, page * PAGE + PAGE - 1).execute()
-            rows = chunk.data or []
-            for r in rows:
-                u = int(r["telegram_id"])
-                correct[u] = correct.get(u, 0) + int(r.get("points") or 0)
-            if len(rows) < PAGE:
-                break
-            page += 1
+        # Single source of truth, paged with a STABLE unique order so the sum is
+        # never truncated/skewed (see sheets.sum_all_player_points). The previous
+        # inline paging here had no .order(), so the page window could shift and
+        # write a too-low total — the exact cause of the home/leaderboard drift.
+        correct: dict[int, int] = await sheets.sum_all_player_points()
         if not correct:
             return
         # Subtract transfer costs (safe — never blocks the sync)
@@ -263,10 +266,12 @@ async def sync_totals_if_drifted():
         for u in correct:
             correct[u] -= costs.get(u, 0)
 
-        # Read current stored totals; only update the ones that differ
-        users_res = sb.table("users").select("telegram_id,total_points").execute()
+        # Read current stored totals; only update the ones that differ.
+        # Use the paginated get_all_users() so the safety net isn't itself
+        # capped at 1000 users.
+        all_users = await sheets.get_all_users()
         to_fix = []
-        for u in (users_res.data or []):
+        for u in all_users:
             uid = int(u["telegram_id"])
             stored = int(u.get("total_points") or 0)
             target = correct.get(uid, 0)
@@ -303,14 +308,30 @@ async def check_due_matches(bot=None):
         kickoff_ts   = int(m.get("kickoff_timestamp") or 0)
         last_checked = int(m.get("last_checked") or 0)
 
-        if not mid or not kickoff_ts:
+        if not mid:
             continue
 
-        # Skip very old matches (more than 7 days past kickoff) — these are likely
-        # stale leftovers from sync. Mark as awarded to silence them permanently.
-        if now - kickoff_ts > 7 * 24 * 3600:
+        # If kickoff_timestamp is missing (0/NULL), derive a pseudo-kickoff from
+        # the match date so the match is NOT skipped forever. The old
+        # "if not kickoff_ts: continue" permanently hid such matches → they never
+        # scored and stayed stuck under "Upcoming". Real fixtures always have at
+        # least a date; a row with neither is a garbage entry we skip (otherwise
+        # it would retry every poll forever with no way to date it).
+        if not kickoff_ts:
+            kickoff_ts = _kickoff_from_date(m.get("match_date"))
+        if not kickoff_ts:
+            logger.warning("Match %s has no kickoff_timestamp and no parseable "
+                           "match_date — skipping", mid)
+            continue
+
+        # Silence only ANCIENT unprocessed matches (>30 days past) to stop endless
+        # API retries on dead/abandoned fixtures. They fall outside the 30-day
+        # Results window, so silencing them cannot create a visible "zombie".
+        # Recent stuck matches keep retrying until the API reports them final —
+        # so a finished match is never silenced without being scored first.
+        if now - kickoff_ts > 30 * 24 * 3600:
             await sheets.mark_match_points_awarded(mid)
-            logger.info("Auto-silenced old match %s (older than 7 days)", mid)
+            logger.info("Auto-silenced ancient match %s (>30 days past)", mid)
             continue
 
         # Not due yet
@@ -333,6 +354,65 @@ async def check_due_matches(bot=None):
             _processing.discard(mid)
 
         await asyncio.sleep(2)
+
+
+async def recheck_stuck_matches(bot=None):
+    """Self-heal 'zombie' matches: points_awarded=True but cached status != final
+    (e.g. matches an older build silenced without ever scoring them, or matches
+    stuck after downtime). Re-fetch from the API and, if now final, score them
+    via the idempotent award_points (upsert + full total recompute, so re-running
+    is safe). Backed off by last_checked so genuinely-abandoned fixtures don't
+    re-hit the API every poll. This is what makes finished matches that got stuck
+    under "Upcoming" automatically flip to a scored result.
+
+    Scores SILENTLY (bot=None into process_match): these are catch-up/old matches,
+    so we never push a result notification for them — avoids redeploy spam and
+    matches the /fixresults behaviour. Users still see the updated result/totals."""
+    now = int(time.time())
+    try:
+        stuck = await sheets.get_stuck_matches(days=30)
+    except Exception as e:
+        logger.warning("recheck_stuck_matches list error: %s", e)
+        return
+    if not stuck:
+        return
+
+    processed = 0
+    for m in stuck:
+        mid = m.get("match_id", "")
+        if not mid:
+            continue
+        kickoff_ts = int(m.get("kickoff_timestamp") or 0)
+        if not kickoff_ts:
+            kickoff_ts = _kickoff_from_date(m.get("match_date"))
+        if not kickoff_ts:
+            continue  # undatable garbage row — nothing we can do
+        # Only attempt once the match is actually due (kickoff + buffer)
+        if now < kickoff_ts + MATCH_DUE_MIN:
+            continue
+        # Back off so a dead/postponed fixture isn't re-fetched every poll
+        last_checked = int(m.get("last_checked") or 0)
+        if last_checked and now - last_checked < RETRY_MIN:
+            continue
+        if mid in _processing:
+            continue
+
+        _processing.add(mid)
+        try:
+            # bot=None → score silently, no result broadcast for catch-up matches
+            await process_match(mid, m, None)
+        except Exception as e:
+            logger.error("recheck_stuck_matches error for %s: %s", mid, e)
+        finally:
+            _processing.discard(mid)
+
+        processed += 1
+        if processed >= 15:   # bound work per poll
+            break
+        await asyncio.sleep(2)
+
+    if processed:
+        logger.info("Self-heal re-checked %d stuck match(es)", processed)
 
 
 async def process_match(match_id: str, cached: dict, bot=None):
@@ -724,23 +804,9 @@ async def award_points(match: dict, bot=None):
     # menu and leaderboard never drift out of sync. Runs on every scoring pass,
     # independent of which users were in this match's batch.
     try:
-        # Page through ALL player_match_points rows — Supabase caps a single
-        # query at 1000 rows, which would otherwise give a partial (too-low) sum
-        # once the table grows past 1000 rows.
-        uid_totals: dict[int, int] = {}
-        _page = 0
-        _PAGE = 1000
-        while True:
-            _chunk = sheets._get_sb().table("player_match_points").select(
-                "telegram_id,points"
-            ).range(_page * _PAGE, _page * _PAGE + _PAGE - 1).execute()
-            _rows = _chunk.data or []
-            for r in _rows:
-                u = int(r["telegram_id"])
-                uid_totals[u] = uid_totals.get(u, 0) + int(r.get("points") or 0)
-            if len(_rows) < _PAGE:
-                break
-            _page += 1
+        # Sum ALL player_match_points per user, paged with a STABLE unique order
+        # so the total can't be truncated/skewed (see sheets.sum_all_player_points).
+        uid_totals: dict[int, int] = await sheets.sum_all_player_points()
 
         # Subtract accumulated transfer point-hits. Wrapped so a failure here
         # NEVER corrupts totals — if it errors, we just don't subtract (costs
@@ -761,11 +827,10 @@ async def award_points(match: dict, bot=None):
             for u in uid_totals.keys()
         }
         # Only write users whose stored total differs, to keep it light.
-        cur_res = sheets._get_sb().table("users").select(
-            "telegram_id,total_points"
-        ).execute()
-        stored_map = {int(r["telegram_id"]): int(r.get("total_points") or 0)
-                      for r in (cur_res.data or [])}
+        # Reuse the paginated `users` list fetched above (the scheduler holds the
+        # single-instance lock, so total_points hasn't changed underneath us).
+        stored_map = {int(u["telegram_id"]): int(u.get("total_points") or 0)
+                      for u in users}
         written = 0
         for u, tp in final_totals.items():
             if stored_map.get(u) != tp:
