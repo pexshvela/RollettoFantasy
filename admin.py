@@ -83,6 +83,10 @@ Format: open YYYY-MM-DD HH:MM close YYYY-MM-DD HH:MM free N</i>
 /closetransfers
 <i>Immediately close the transfer window.</i>
 
+/autotransfers on | off | status
+<i>Automatic transfer window: opens between rounds, closes 1h before the next
+round's first kickoff. When ON, manual /settransfers open/close is ignored.</i>
+
 ━━━━━━━━━━━━━━━━━
 👥 <b>USERS</b>
 ━━━━━━━━━━━━━━━━━
@@ -847,13 +851,26 @@ async def cmd_settransfers(message: Message, state: FSMContext):
         await sheets.set_setting("transfer_window_close", close_str)
         await sheets.set_setting("free_transfers",        free_n)
 
-        free_label = "∞ (unlimited)" if free_n == 0 else str(free_n)
+        # Report the rules that will ACTUALLY apply (tournament-aware). For World
+        # Cup the free count and extra cost come from the per-matchday config, so
+        # the typed "free N" and the PL EXTRA_TRANSFER_COST constant do NOT apply
+        # — showing them here was misleading (e.g. "-4" when WC charges -3).
+        tournament = await sheets.get_tournament()
+        rules      = await sheets.get_transfer_rules()
+        eff_free   = rules["free"]
+        eff_cost   = rules["extra_cost"]
+        free_label = "∞ (unlimited)" if eff_free == 0 else str(eff_free)
+        note = ""
+        if tournament == "wc":
+            note = ("\n\n<i>ℹ️ World Cup: free transfers &amp; extra cost are set "
+                    "automatically per matchday — the typed <code>free</code> value "
+                    "is ignored.</i>")
         await message.answer(
             f"✅ <b>Transfer window set:</b>\n\n"
             f"🔓 Open:  <b>{open_match.group(1)} {open_match.group(2)} UTC</b>\n"
             f"🔒 Close: <b>{close_match.group(1)} {close_match.group(2)} UTC</b>\n"
             f"🎟 Free transfers: <b>{free_label}</b>\n"
-            f"💸 Extra transfer cost: -{config.EXTRA_TRANSFER_COST} pts",
+            f"💸 Extra transfer cost: -{eff_cost} pts" + note,
             parse_mode="HTML"
         )
     except Exception as e:
@@ -871,6 +888,72 @@ async def cmd_closetransfers(message: Message, state: FSMContext):
     now = datetime.now(timezone.utc).isoformat()
     await sheets.set_setting("transfer_window_close", now)
     await message.answer("✅ Transfer window closed immediately.")
+
+
+@router.message(Command("autotransfers"))
+async def cmd_autotransfers(message: Message, state: FSMContext):
+    """Toggle the automatic transfer window: open between rounds, closed from
+    1 hour before the next round's first kickoff until that round finishes.
+    When ON, the manual /settransfers open/close times are ignored."""
+    if not is_admin(message.from_user.id):
+        return
+    from datetime import datetime as _dt, timezone as _tz
+
+    parts = message.text.strip().split()
+    arg = parts[1].lower() if len(parts) >= 2 else ""
+
+    if arg not in ("on", "off", "status"):
+        cur = await sheets.get_setting("transfer_window_auto")
+        await message.answer(
+            "Usage: <code>/autotransfers on|off|status</code>\n"
+            f"Currently: <b>{'ON' if cur else 'OFF'}</b>",
+            parse_mode="HTML")
+        return
+
+    if arg == "status":
+        cur = await sheets.get_setting("transfer_window_auto")
+        w   = await sheets.get_auto_transfer_window()
+        if not w:
+            await message.answer(
+                f"Auto transfers: <b>{'ON' if cur else 'OFF'}</b>\n"
+                "No fixtures cached yet — run /fixtures.", parse_mode="HTML")
+            return
+        when = (_dt.fromtimestamp(w["closes_at"], tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+                if w.get("closes_at") else "—")
+        if w["open"]:
+            body = f"🟢 OPEN — closes <b>{when} UTC</b> (1h before next round)"
+        else:
+            body = f"🔒 CLOSED — reopens once this round's matches finish"
+        await message.answer(
+            f"Auto transfers: <b>{'ON' if cur else 'OFF'}</b>\n"
+            f"Computed state: {body}", parse_mode="HTML")
+        return
+
+    await sheets.set_setting("transfer_window_auto", arg == "on")
+    if arg == "off":
+        await message.answer(
+            "✅ Automatic transfer window <b>OFF</b>.\n"
+            "Back to manual <code>/settransfers</code> windows.", parse_mode="HTML")
+        return
+
+    # arg == "on": confirm and show what it resolves to right now
+    w = await sheets.get_auto_transfer_window()
+    extra = ""
+    if w:
+        if w["open"]:
+            extra = "\nRight now: 🟢 <b>OPEN</b>"
+            if w.get("closes_at"):
+                cs = _dt.fromtimestamp(w["closes_at"], tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+                extra += f" — closes <b>{cs} UTC</b>"
+        else:
+            extra = "\nRight now: 🔒 <b>CLOSED</b> (a round is live or starts within 1h)"
+    else:
+        extra = "\n<i>No fixtures cached yet — run /fixtures so it can read the schedule.</i>"
+    await message.answer(
+        "✅ Automatic transfer window <b>ON</b>.\n"
+        "Opens between rounds, closes 1 hour before the next round's first kickoff.\n"
+        "<i>Manual /settransfers open/close is now ignored.</i>" + extra,
+        parse_mode="HTML")
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
