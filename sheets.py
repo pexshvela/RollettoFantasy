@@ -1181,7 +1181,77 @@ async def get_transfer_settings() -> dict:
     }
 
 
+async def get_auto_transfer_window() -> dict | None:
+    """Compute the transfer window automatically from the fixture schedule.
+
+    OPEN between rounds: from when the current round's matches finish until
+    1 hour before the next round's first kickoff.
+    CLOSED from 1 hour before a round's first kickoff until that round's matches
+    finish.
+
+    Returns {"open": bool, "closes_at": int|None, "reopens_after": int|None}
+    (unix-second UTC timestamps), or None if it can't be determined (no fixtures
+    cached) so callers can fall back to the manual window."""
+    try:
+        sb = _get_sb()
+        res = sb.table("match_cache").select(
+            "round,kickoff_timestamp,status,points_awarded"
+        ).execute()
+        rows = res.data or []
+        FINAL = {"final", "ft", "match finished", "aet", "pen", "finished"}
+        FINISH_BUFFER = 3 * 3600   # a round is "over" 3h after its last kickoff
+        LOCK_BEFORE   = 3600       # close 1h before the next round's first kickoff
+        now = int(time.time())
+
+        rounds: dict[str, dict] = {}
+        for m in rows:
+            rnd = (m.get("round") or "").strip()
+            ts  = int(m.get("kickoff_timestamp") or 0)
+            if not rnd or not ts:
+                continue
+            g = rounds.setdefault(rnd, {"first": ts, "last": ts, "all_final": True})
+            g["first"] = min(g["first"], ts)
+            g["last"]  = max(g["last"], ts)
+            status = str(m.get("status") or "").lower()
+            if status not in FINAL and not m.get("points_awarded"):
+                g["all_final"] = False
+        if not rounds:
+            return None
+
+        def finished(g):
+            # All matches reported final, OR well past the last kickoff — the
+            # buffer stops a single stuck/late result from freezing the window.
+            return g["all_final"] or now > g["last"] + FINISH_BUFFER
+
+        ordered = sorted(rounds.values(), key=lambda g: g["first"])
+        # The earliest round that hasn't finished yet drives the lock.
+        active = next((g for g in ordered if not finished(g)), None)
+        if active is None:
+            # Every cached round is finished — between tournaments, or the next
+            # round isn't scheduled yet. Keep transfers OPEN with no known close.
+            return {"open": True, "closes_at": None, "reopens_after": None}
+
+        lock_start = active["first"] - LOCK_BEFORE
+        if now >= lock_start:
+            # Within 1h-before, or during, the active round → CLOSED.
+            return {"open": False, "closes_at": lock_start,
+                    "reopens_after": active["last"]}
+        # Between rounds → OPEN until 1h before the next round's first kickoff.
+        return {"open": True, "closes_at": lock_start, "reopens_after": None}
+    except Exception as e:
+        logger.error("get_auto_transfer_window error: %s", e)
+        return None
+
+
 async def is_transfer_window_open() -> bool:
+    # Auto mode (admin toggled via /autotransfers): the window is computed from
+    # the fixture schedule — open between rounds, closed from 1h before kickoff
+    # until the round finishes. Ignores the manual open/close timestamps.
+    if await get_setting("transfer_window_auto"):
+        w = await get_auto_transfer_window()
+        if w is not None:
+            return bool(w["open"])
+        # Couldn't compute (no fixtures cached) — fall back to the manual window.
     ts = await get_transfer_settings()
     if not ts["open"] or not ts["close"]:
         return False
