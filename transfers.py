@@ -75,8 +75,16 @@ async def show_transfers(callback: CallbackQuery, state: FSMContext):
     remaining_free = max(0, (free_n if free_n != 0 else 999) - used)
     cost_next = 0 if remaining_free > 0 or free_n == 0 else extra_cost
 
-    ts_settings = await sheets.get_transfer_settings()
-    close_time  = (ts_settings.get("close") or "")[:16]
+    # Close time for display: computed window in auto mode, else the manual setting.
+    close_time = ""
+    if await sheets.get_setting("transfer_window_auto"):
+        _w = await sheets.get_auto_transfer_window()
+        if _w and _w.get("closes_at"):
+            from datetime import datetime as _dt, timezone as _tz
+            close_time = _dt.fromtimestamp(_w["closes_at"], tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+    if not close_time:
+        ts_settings = await sheets.get_transfer_settings()
+        close_time  = (ts_settings.get("close") or "")[:16]
 
     lines = [
         t(lang, "transfers_open", close=close_time),
