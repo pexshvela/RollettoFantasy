@@ -136,6 +136,11 @@ Use after a major fix. Takes longer than a single gameweek recalculation.</i>
 Use if a match is stuck as "upcoming" or "scheduled" after it ended.
 Example: /recheck 1540842</i>
 
+/recheckafter MATCH_ID | DATE
+<i>Batch re-score every match from a cutoff onward (for an API-outage window).
+Only rewrites matches the API now has player stats for; leaves the rest untouched.
+Examples: /recheckafter 1565179  •  /recheckafter 2026-07-03  •  /recheckafter 2026-07-03 20:00</i>
+
 /fixresults
 <i>Auto-heal ALL matches stuck as "upcoming" (finished but never scored) in the
 last 30 days. Re-fetches each and scores it if final. The scheduler does this
@@ -206,6 +211,156 @@ async def cmd_recheck(message: Message, state: FSMContext):
     except Exception as e:
         logger.exception("recheck failed")
         await message.answer(f"❌ Error: {e}")
+
+
+@router.message(Command("recheckafter"))
+async def cmd_recheckafter(message: Message, state: FSMContext):
+    """Batch re-score every cached match from a cutoff onward — for when the API
+    glitched for a window and several matches failed to score.
+
+    SAFE: a match is only rewritten if the API now returns final status AND
+    player stats. Matches still missing player data are left exactly as they are
+    (their existing points are NOT wiped). Idempotent — safe to run again.
+
+    Usage:
+      /recheckafter 1565179          — from this match's kickoff onward
+      /recheckafter 2026-07-03       — from this date (00:00 UTC) onward
+      /recheckafter 2026-07-03 20:00 — from this UTC time onward
+    """
+    if not is_admin(message.from_user.id):
+        return
+    import asyncio
+    from datetime import datetime as _dt, timezone as _tz
+    import football_api as _fapi
+    from scheduler import award_points
+
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer(
+            "Usage:\n"
+            "/recheckafter MATCH_ID            — from that match's kickoff onward\n"
+            "/recheckafter 2026-07-03          — from that date onward\n"
+            "/recheckafter 2026-07-03 20:00    — from that UTC time onward"
+        )
+        return
+
+    sb = sheets._get_sb()
+    arg = parts[1].strip()
+
+    # Resolve cutoff kickoff timestamp
+    cutoff_ts = None
+    if arg.isdigit():
+        row = sb.table("match_cache").select(
+            "kickoff_timestamp,home_team,away_team"
+        ).eq("match_id", arg).execute()
+        if not row.data:
+            await message.answer(f"❌ Match {arg} not in cache. Use a date instead, e.g. /recheckafter 2026-07-03")
+            return
+        cutoff_ts = int(row.data[0].get("kickoff_timestamp") or 0)
+        label = f"{row.data[0].get('home_team','?')} vs {row.data[0].get('away_team','?')}"
+    else:
+        try:
+            timestr = parts[2] if len(parts) >= 3 else "00:00"
+            dt = _dt.fromisoformat(f"{arg}T{timestr}:00+00:00")
+            cutoff_ts = int(dt.timestamp())
+            label = dt.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception as e:
+            await message.answer(f"❌ Bad date/time: {e}")
+            return
+    if not cutoff_ts:
+        await message.answer("❌ Could not determine the cutoff kickoff time (match has no timestamp).")
+        return
+
+    # Collect all cached matches at/after the cutoff (paged, stable order)
+    matches = []
+    page = 0
+    PAGE = 1000
+    while True:
+        chunk = (sb.table("match_cache").select(
+            "match_id,home_team,away_team,kickoff_timestamp,status,match_date"
+        ).gte("kickoff_timestamp", cutoff_ts)
+         .order("kickoff_timestamp").order("match_id")
+         .range(page * PAGE, page * PAGE + PAGE - 1).execute())
+        rows = chunk.data or []
+        matches.extend(rows)
+        if len(rows) < PAGE:
+            break
+        page += 1
+
+    if not matches:
+        await message.answer("No cached matches found at/after that cutoff.")
+        return
+
+    await message.answer(
+        f"🔄 Re-checking {len(matches)} match(es) from <b>{label}</b> onward...\n"
+        f"This makes live API calls — please wait.",
+        parse_mode="HTML"
+    )
+
+    scored = 0
+    no_data = 0
+    fetch_fail = 0
+    outcome_lines = []
+    for m in matches:
+        mid = str(m.get("match_id") or "")
+        if not mid:
+            continue
+        name = f"{m.get('home_team','?')} v {m.get('away_team','?')}"
+        try:
+            full = await _fapi.fetch_full_match(mid)
+        except Exception:
+            full = None
+        if not full:
+            fetch_fail += 1
+            outcome_lines.append(f"⚠️ {name} — API fetch failed")
+            await asyncio.sleep(1.0)
+            continue
+        ps = full.get("player_stats") or {}
+        # GUARD: only re-score when the API actually has final data + player stats.
+        # Otherwise skip — never wipe an already-correct match's points.
+        if full.get("status") != "final" or not ps:
+            no_data += 1
+            outcome_lines.append(f"⏳ {name} — no player stats yet (left unchanged)")
+            await asyncio.sleep(1.0)
+            continue
+        try:
+            sb.table("player_match_points").delete().eq("match_id", mid).execute()
+            full["points_awarded"] = False
+            await sheets.save_match_cache(full)
+            await award_points(full, None)   # bot=None → no broadcast spam
+            scored += 1
+            outcome_lines.append(
+                f"✅ {full.get('home_team')} {full.get('home_score')}-{full.get('away_score')} {full.get('away_team')}"
+            )
+        except Exception as e:
+            outcome_lines.append(f"❌ {name} — error: {e}")
+        await asyncio.sleep(1.2)
+
+    await message.answer(
+        f"<b>Done.</b>\n"
+        f"✅ Re-scored: {scored}\n"
+        f"⏳ Still no player stats (unchanged): {no_data}\n"
+        f"⚠️ Fetch failed: {fetch_fail}",
+        parse_mode="HTML"
+    )
+    for i in range(0, len(outcome_lines), 30):
+        chunk_txt = "\n".join(outcome_lines[i:i + 30])
+        if chunk_txt.strip():
+            await message.answer(chunk_txt)
+
+    if scored:
+        from registration import _push_home
+        users = await sheets.get_all_users()
+        pushed = 0
+        for u in users:
+            try:
+                lang = u.get("language", "en")
+                await _push_home(message.bot, int(u["telegram_id"]), u, lang)
+                pushed += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        await message.answer(f"📲 Home refreshed for {pushed} users.")
 
 
 # ── Admin panel ───────────────────────────────────────────────────────────────
