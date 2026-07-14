@@ -89,6 +89,23 @@ async def _sync_missing_matches():
         logger.warning("_sync_missing_matches error: %s", e)
 
 
+_last_periodic_sync = 0
+
+async def _maybe_periodic_sync():
+    """Re-sync upcoming fixtures at most once an hour so newly-scheduled matches
+    (e.g. the next knockout round once the bracket is set) appear in the cache
+    without anyone running /fixtures. Keeps eliminated-team detection current."""
+    global _last_periodic_sync
+    now = int(time.time())
+    if now - _last_periodic_sync < 3600:
+        return
+    _last_periodic_sync = now
+    try:
+        await _sync_missing_matches()
+    except Exception as e:
+        logger.warning("periodic sync error: %s", e)
+
+
 async def check_completed_windows(bot):
     """When a kickoff window fully completes, push a fresh home menu to every user.
     Tracks completed windows by their match_id set, stored as JSON to avoid
@@ -178,6 +195,8 @@ async def run_scheduler(bot=None):
 
     # Sync missing matches on startup so no match is ever invisible to scheduler
     await _sync_missing_matches()
+    global _last_periodic_sync
+    _last_periodic_sync = int(time.time())   # startup counts as the first sync
     # On startup, mark all currently-complete recent windows as already-pushed
     # so we don't spam home menus right after a redeploy.
     try:
@@ -218,6 +237,9 @@ async def run_scheduler(bot=None):
             await check_due_matches(bot)
             # Heal any matches stuck under "Upcoming" / silenced-without-scoring
             await recheck_stuck_matches(bot)
+            # Hourly: pull in newly-scheduled fixtures (e.g. the next knockout
+            # round) so eliminated-team detection stays current automatically.
+            await _maybe_periodic_sync()
             if not _first_run:
                 # Skip notifications on startup to avoid re-sending after redeploy
                 await check_deadline_notifications(bot)
