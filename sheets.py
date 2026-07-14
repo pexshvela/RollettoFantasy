@@ -1125,17 +1125,21 @@ async def get_eliminated_teams() -> set:
     """WC only: the set of player-file team names whose nation is OUT, so the
     squad/transfer pickers hide their players. Empty set for non-WC.
 
-    'Alive' teams are determined as:
+    Fully automatic. 'Alive' teams are determined as:
       1. An explicit admin override (/setalive France, Spain, ...) if set, else
       2. every team that still has an UPCOMING (future, not-finished) fixture in
-         match_cache.
+         match_cache — the scheduler re-syncs fixtures hourly so new rounds appear
+         on their own, and this only counts names that match a real player-file
+         team (so bracket placeholders like "Winner QF1" are ignored).
     Eliminated = every team in the active tournament's PLAYER FILE that is not
-    alive. Using the player file as the universe (instead of cached match
-    history) makes this robust to /fixtures pruning old matches — the previous
-    'played minus future' logic silently un-eliminated teams once their matches
-    aged out of the 7-day cache window. Falls back to hiding NOBODY when the
-    alive set can't be determined (e.g. between rounds before the next fixtures
-    are synced)."""
+    alive (player file as the universe makes it robust to /fixtures pruning old
+    matches).
+
+    The last non-empty alive set is PERSISTED (auto_alive_last). If detection
+    momentarily can't see any upcoming fixtures — the short gap after a round
+    ends and before the next round's fixtures are published — we reuse the last
+    known set instead of suddenly un-hiding everyone. It self-updates every round,
+    so no manual step is ever needed."""
     try:
         tournament = await get_tournament()
         if tournament != "wc":
@@ -1144,42 +1148,56 @@ async def get_eliminated_teams() -> set:
         import time as _time
         global _ELIM_CACHE, _ELIM_CACHE_TS
         now = _time.time()
-        if _ELIM_CACHE is not None and (now - _ELIM_CACHE_TS) < 120:
+        if _ELIM_CACHE is not None and (now - _ELIM_CACHE_TS) < 300:
             return _ELIM_CACHE
 
-        # 1. Alive team names (admin/API spellings)
-        alive_names = set()
+        import players as _pl
+        all_teams = {p["team"] for p in _pl.get_all_players().values() if p.get("team")}
+        all_norm = {_norm_team(t) for t in all_teams}
+
+        # 1. Manual override wins outright.
         manual = await get_setting("alive_teams_override", None)
         if isinstance(manual, list) and manual:
-            alive_names = {str(x) for x in manual if str(x).strip()}
-        else:
-            sb = _get_sb()
-            res = sb.table("match_cache").select(
-                "home_team,away_team,kickoff_timestamp,status"
-            ).execute()
-            rows = res.data or []
-            FINISHED = {"final", "ft", "match finished", "aet", "pen", "finished"}
-            now_ts = int(now)
-            for m in rows:
-                status = (m.get("status") or "").lower()
-                ts = int(m.get("kickoff_timestamp") or 0)
-                if status not in FINISHED and ts > now_ts:
-                    for tm in (m.get("home_team"), m.get("away_team")):
-                        if tm and tm.strip():
-                            alive_names.add(tm.strip())
+            alive_norm = {_norm_team(x) for x in manual}
+            elim = {t for t in all_teams if _norm_team(t) not in alive_norm}
+            _ELIM_CACHE, _ELIM_CACHE_TS = elim, now
+            return elim
 
-        # Can't determine who's alive → hide nobody (safe fallback).
-        if not alive_names:
+        # 2. Auto: real teams with an upcoming (future, not-finished) fixture.
+        sb = _get_sb()
+        res = sb.table("match_cache").select(
+            "home_team,away_team,kickoff_timestamp,status"
+        ).execute()
+        rows = res.data or []
+        FINISHED = {"final", "ft", "match finished", "aet", "pen", "finished"}
+        now_ts = int(now)
+        alive_norm = set()
+        for m in rows:
+            status = (m.get("status") or "").lower()
+            ts = int(m.get("kickoff_timestamp") or 0)
+            if status not in FINISHED and ts > now_ts:
+                for tm in (m.get("home_team"), m.get("away_team")):
+                    n = _norm_team(tm)
+                    if n and n in all_norm:   # ignore placeholders / non-WC names
+                        alive_norm.add(n)
+
+        # 3. Persist last-known alive so a between-rounds gap can't un-hide teams.
+        if alive_norm:
+            cur_list = sorted(alive_norm)
+            saved = await get_setting("auto_alive_last", None)
+            if saved != cur_list:
+                await set_setting("auto_alive_last", cur_list)
+        else:
+            saved = await get_setting("auto_alive_last", None)
+            if isinstance(saved, list) and saved:
+                alive_norm = set(saved)
+
+        # Truly nothing known yet (e.g. before any fixtures) → hide nobody.
+        if not alive_norm:
             _ELIM_CACHE, _ELIM_CACHE_TS = set(), now
             return set()
 
-        alive_norm = {_norm_team(a) for a in alive_names}
-
-        # 2. Universe = teams in the active tournament's player file.
-        import players as _pl
-        all_teams = {p["team"] for p in _pl.get_all_players().values() if p.get("team")}
         eliminated = {t for t in all_teams if _norm_team(t) not in alive_norm}
-
         _ELIM_CACHE, _ELIM_CACHE_TS = eliminated, now
         return eliminated
     except Exception as e:
@@ -1433,6 +1451,10 @@ async def reset_for_tournament_change():
             "captain": "",
             "formation": "",
         }).neq("telegram_id", 0).execute()
+        # Drop any stale alive-teams state so the new tournament starts clean.
+        await set_setting("auto_alive_last", None)
+        await set_setting("alive_teams_override", None)
+        invalidate_elim_cache()
     except Exception as e:
         logger.error("reset_for_tournament_change error: %s", e)
 
