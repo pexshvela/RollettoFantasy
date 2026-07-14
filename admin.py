@@ -28,6 +28,9 @@ def is_admin(uid: int) -> bool:
 
 COMMANDS_TEXT = """📖 <b>ADMIN COMMANDS</b>
 
+/admin
+<i>Open the admin panel (buttons for messaging, resets and this list).</i>
+
 ━━━━━━━━━━━━━━━━━
 🏆 <b>TOURNAMENT</b>
 ━━━━━━━━━━━━━━━━━
@@ -55,6 +58,16 @@ Run this at start of campaign or before each matchday.</i>
 /setgwstatus ID active|upcoming|finished
 <i>Manually update a gameweek status.</i>
 
+/syncmatches
+<i>Sync all matches in the next 14 days into the cache (keeps existing ones).
+Lighter than /fixtures — doesn't wipe or recreate gameweeks.</i>
+
+/matchdays 35   (or  /matchdays semi-finals)
+<i>List all fixtures for a round with scores/times.</i>
+
+/windows
+<i>Show upcoming kickoff windows — when sub-swaps lock and unlock.</i>
+
 ━━━━━━━━━━━━━━━━━
 ⏰ <b>DEADLINES</b>
 ━━━━━━━━━━━━━━━━━
@@ -65,6 +78,10 @@ Users must confirm before this time or score 0 for that round.</i>
 
 /setdeadline 2026-05-08 18:00
 <i>Set a global deadline (fallback if no round deadline set).</i>
+
+/autodeadline   (or  /autodeadline 35  /  /autodeadline semi-finals)
+<i>Auto-set the round deadline to 1 hour before its first kickoff (from the API).
+For World Cup, pass the matchday number 1-8.</i>
 
 /cleardeadline 35
 <i>Remove deadline for Round 35.</i>
@@ -86,6 +103,21 @@ Format: open YYYY-MM-DD HH:MM close YYYY-MM-DD HH:MM free N</i>
 /autotransfers on | off | status
 <i>Automatic transfer window: opens between rounds, closes 1h before the next
 round's first kickoff. When ON, manual /settransfers open/close is ignored.</i>
+
+━━━━━━━━━━━━━━━━━
+🌍 <b>TEAMS STILL IN (WC)</b>
+━━━━━━━━━━━━━━━━━
+
+/alive
+<i>Show which nations are still in vs hidden from the pickers.</i>
+
+/setalive France, Spain, England, Argentina
+<i>Force the list of nations still in the tournament. ONLY their players show in
+Squad & Transfers. Overrides auto-detection — use when the bot shows knocked-out
+teams.</i>
+
+/clearalive
+<i>Remove the manual list → back to automatic detection.</i>
 
 ━━━━━━━━━━━━━━━━━
 👥 <b>USERS</b>
@@ -384,9 +416,30 @@ async def show_commands(callback: CallbackQuery, state: FSMContext):
     kb.button(text="◀️ Back to Admin", callback_data="admin:back")
     kb.button(text="🏠 Home",          callback_data="home:back")
     kb.adjust(1)
-    await callback.message.edit_text(
-        COMMANDS_TEXT, parse_mode="HTML", reply_markup=kb.as_markup()
-    )
+
+    # COMMANDS_TEXT can exceed Telegram's 4096-char message limit, so split it on
+    # section separators and send across multiple messages (keyboard on the last).
+    SEP = "━━━━━━━━━━━━━━━━━"
+    chunks, cur = [], ""
+    for i, block in enumerate(COMMANDS_TEXT.split(SEP)):
+        piece = (SEP if i > 0 else "") + block
+        if cur and len(cur) + len(piece) > 3500:
+            chunks.append(cur)
+            cur = piece
+        else:
+            cur += piece
+    if cur.strip():
+        chunks.append(cur)
+
+    for idx, chunk in enumerate(chunks):
+        markup = kb.as_markup() if idx == len(chunks) - 1 else None
+        try:
+            if idx == 0:
+                await callback.message.edit_text(chunk, parse_mode="HTML", reply_markup=markup)
+            else:
+                await callback.message.answer(chunk, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            await callback.message.answer(chunk, parse_mode="HTML", reply_markup=markup)
     await callback.answer()
 
 
@@ -1109,6 +1162,88 @@ async def cmd_autotransfers(message: Message, state: FSMContext):
         "Opens between rounds, closes 1 hour before the next round's first kickoff.\n"
         "<i>Manual /settransfers open/close is now ignored.</i>" + extra,
         parse_mode="HTML")
+
+
+# ── Alive / eliminated teams (World Cup pickers) ──────────────────────────────
+
+@router.message(Command("setalive"))
+async def cmd_setalive(message: Message, state: FSMContext):
+    """Manually set which nations are still in the tournament. When set, ONLY
+    these teams' players appear in Squad & Transfers (overrides auto-detection).
+    Usage: /setalive France, Spain, England, Argentina"""
+    if not is_admin(message.from_user.id):
+        return
+    raw = message.text.split(" ", 1)
+    if len(raw) < 2 or not raw[1].strip():
+        await message.answer(
+            "Usage: /setalive France, Spain, England, Argentina\n"
+            "(comma-separated nations still in the tournament)"
+        )
+        return
+    names = [n.strip() for n in raw[1].replace("\n", " ").split(",") if n.strip()]
+    if not names:
+        await message.answer("No team names parsed. Example: /setalive France, Spain, England, Argentina")
+        return
+
+    all_teams = {p["team"] for p in pl_module.get_all_players().values() if p.get("team")}
+    all_norm = {sheets._norm_team(t): t for t in all_teams}
+    matched, unknown = [], []
+    for n in names:
+        canon = all_norm.get(sheets._norm_team(n))
+        if canon and canon not in matched:
+            matched.append(canon)
+        elif not canon:
+            unknown.append(n)
+    if not matched:
+        await message.answer(
+            "❌ None of those match teams in the current player list.\n"
+            "Check spelling. Available teams include:\n" + ", ".join(sorted(all_teams))
+        )
+        return
+
+    await sheets.set_setting("alive_teams_override", matched)
+    sheets.invalidate_elim_cache()
+    msg = (f"✅ Alive teams set ({len(matched)}):\n<b>{', '.join(matched)}</b>\n\n"
+           f"Only their players now show in Squad & Transfers.")
+    if unknown:
+        msg += f"\n\n⚠️ Not recognised (ignored): {', '.join(unknown)}"
+    await message.answer(msg, parse_mode="HTML")
+
+
+@router.message(Command("clearalive"))
+async def cmd_clearalive(message: Message, state: FSMContext):
+    """Remove the manual alive-teams override → back to automatic detection."""
+    if not is_admin(message.from_user.id):
+        return
+    await sheets.set_setting("alive_teams_override", None)
+    sheets.invalidate_elim_cache()
+    await message.answer(
+        "✅ Manual alive-teams cleared.\n"
+        "Back to <b>automatic</b> detection (teams that still have an upcoming fixture).",
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("alive"))
+async def cmd_alive(message: Message, state: FSMContext):
+    """Show which teams are currently considered still-in vs eliminated."""
+    if not is_admin(message.from_user.id):
+        return
+    manual = await sheets.get_setting("alive_teams_override", None)
+    elim = await sheets.get_eliminated_teams()
+    all_teams = {p["team"] for p in pl_module.get_all_players().values() if p.get("team")}
+    alive = sorted(all_teams - set(elim))
+    mode = "🔧 manual override" if (isinstance(manual, list) and manual) else "🤖 automatic"
+    lines = [
+        f"🌍 <b>Still in</b> ({mode}) — {len(alive)}:",
+        ", ".join(alive) if alive else "(none)",
+    ]
+    if elim:
+        lines.append(f"\n🚫 <b>Hidden</b> — {len(elim)}:")
+        lines.append(", ".join(sorted(elim)))
+    else:
+        lines.append("\n(no teams hidden — everyone shows)")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
