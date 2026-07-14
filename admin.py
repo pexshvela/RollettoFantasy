@@ -577,6 +577,9 @@ async def cmd_fixtures(message: Message, state: FSMContext):
     from scheduler import auto_create_gameweeks
     await auto_create_gameweeks([m for m in relevant if m["date"] >= today])
 
+    # Fixtures just changed — recompute eliminated teams from the fresh cache.
+    sheets.invalidate_elim_cache()
+
     past   = [m for m in relevant if m["date"] < today and m["status"] == "final"]
     future = [m for m in relevant if m["date"] >= today]
 
